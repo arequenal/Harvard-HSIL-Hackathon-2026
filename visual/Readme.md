@@ -5,6 +5,7 @@ Prototipo inicial de simulador interactivo de emergencias médicas para la ciuda
 En una segunda fase, se evalúa el tráfico global de la ciudad (calculado por cuartiles) y la saturación hospitalaria en tiempo real para derivar al paciente al centro médico óptimo.
 
 **- hospitales_madrid_nodos.csv**: esto es un csv con todos los nombres de los hospitales de la ciudad de Madrid, su latitud, su longitud y el número del nodo (cruce de calles) más cercano al hospital en el grafo madrid_grafo.
+
 **- madrid_grafo.rar**: esto es un archivo comprimido (descomprimelo) con un grafo con todas las calles de la ciudad. Las aristas son calles y las intersecciones nodos. La librería OSMnx lo lee y lo pasa a un objeto MultiDiGraph nativo de la librería NetworkX.
 
 ## ⚙️ Requisitos Previos
