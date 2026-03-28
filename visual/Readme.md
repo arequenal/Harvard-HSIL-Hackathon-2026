@@ -27,5 +27,5 @@ python -m pip install -r requirements.txt
 **3. Corre el código**
 Ejecuta este comando, te abrirá una pestaña en el navegador:
 ```bash
-python -m streamlit run app.py
+python -m streamlit run prototipo_ambulancIA.py
 ```
