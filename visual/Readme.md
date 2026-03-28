@@ -12,11 +12,11 @@ En una segunda fase, se evalúa el tráfico global de la ciudad (calculado por c
 
 Sigue estos pasos para arrancar el Centro de Mando en tu propio ordenador:
 
-**1. Clona este repositorio y abre la terminal** (es decir descarga esta carpeta y descomprime)
-Asegúrate de que tu terminal está situada en la carpeta donde has descargado estos archivos. (comando cd ruta)
+**1. Clona este repositorio (descarga esta carpeta)**
+Descomprime la carpeta en sí y dentro el archivo madrid_grafo.rar. Asegúrate de que tu terminal está situada en la carpeta donde has descargado estos archivos. (comando cd ruta)
 
-**2. Instala las dependencias necesarias**
-Ejecuta este comando para instalar el motor matemático y visual:
+**2. Abre la terminal e instala las dependencias necesarias**
+Ejecuta este comando para instalar el motor matemático y visual (instala las librerías y frameworks de requirements.txt):
 ```bash
 python -m pip install -r requirements.txt
 ```
