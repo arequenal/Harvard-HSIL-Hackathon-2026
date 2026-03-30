@@ -7,52 +7,61 @@ import json
 import streamlit.components.v1 as components
 
 # ==============================================================================
-# 1. CONFIGURACIÓN DE LA PÁGINA
+# 1. CONFIGURACIÓN DE LA PÁGINA (Pantalla completa real)
 # ==============================================================================
-st.set_page_config(page_title="IA Ambulancias Smart City", layout="wide")
-st.title("🚑 Smart City: Enrutamiento Dinámico e Inteligencia de Tráfico")
+st.set_page_config(page_title="IA Ambulancias Smart City", layout="wide", initial_sidebar_state="collapsed")
+
+# Ocultar todos los menús, cabeceras y márgenes de Streamlit para "Modo Kiosko"
+st.markdown("""
+    <style>
+        #MainMenu {visibility: hidden;}
+        header {visibility: hidden;}
+        footer {visibility: hidden;}
+        .block-container {
+            padding-top: 0rem !important; 
+            padding-bottom: 0rem !important; 
+            padding-left: 0rem !important; 
+            padding-right: 0rem !important;
+            max-width: 100% !important;
+        }
+        iframe {
+            height: 100vh !important; /* Ocupa el 100% del alto de la ventana */
+        }
+    </style>
+""", unsafe_allow_html=True)
 
 # ==============================================================================
 # 2. CARGA DE DATOS Y MOTOR DE TRÁFICO GLOBAL (En Caché)
 # ==============================================================================
 @st.cache_resource
 def load_graph_with_traffic():
-    # Solo cargamos el grafo y asignamos pesos para la IA matemática.
     G = ox.load_graphml("madrid_grafo.graphml")
-    print("Calculando pesos de tráfico en el grafo...")
-    
     for u, v, key, data in G.edges(keys=True, data=True):
         traffic_factor = random.uniform(1.0, 3.0)
         data['traffic_factor'] = traffic_factor
         data['weighted_length'] = data.get('length', 1.0) * traffic_factor
-            
     return G
 
 @st.cache_data
 def cargar_hospitales():
     return pd.read_csv("hospitales_madrid_nodos.csv")
 
-with st.spinner("Cargando cerebro de la ciudad de Madrid..."):
+with st.spinner("Iniciando Dashboard Autónomo de la Ciudad (Calculando red)..."):
     grafo = load_graph_with_traffic()
     df_hospitales = cargar_hospitales()
     lista_nodos = list(grafo.nodes())
 
-# --- ZONAS DE TRÁFICO (Basadas en Puntos Negros reales de Madrid) ---
+# --- ZONAS DE TRÁFICO ---
 ZONAS_TRAFICO = [
-    # ALTO TRÁFICO (Puntos Negros de congestión y accidentes reales)
-    {"lat": 40.4215, "lon": -3.6590, "radio": 1500, "nivel": "Alto"},   # Nudo Este / M-23 (O'Donnell)
-    {"lat": 40.3920, "lon": -3.6850, "radio": 1600, "nivel": "Alto"},   # Méndez Álvaro / Entradas M-30 Sur
-    {"lat": 40.4490, "lon": -3.6450, "radio": 1300, "nivel": "Alto"},   # A-2 km 5 (Puente de la Cea)
-    
-    # MEDIO TRÁFICO (Zonas céntricas y comerciales)
-    {"lat": 40.4650, "lon": -3.6880, "radio": 1400, "nivel": "Medio"},  # Nudo Norte / Castellana
-    {"lat": 40.4190, "lon": -3.7020, "radio": 1100, "nivel": "Medio"},  # Centro Histórico / Gran Vía
-    
-    # BAJO TRÁFICO (El mapa no pintará nada aquí para no molestar visualmente)
-    {"lat": 40.4080, "lon": -3.6750, "radio": 900, "nivel": "Bajo"}     # Zona residencial Pacífico
+    {"lat": 40.4215, "lon": -3.6590, "radio": 1500, "nivel": "Alto"},   
+    {"lat": 40.3920, "lon": -3.6850, "radio": 1600, "nivel": "Alto"},   
+    {"lat": 40.4490, "lon": -3.6450, "radio": 1300, "nivel": "Alto"},   
+    {"lat": 40.4650, "lon": -3.6880, "radio": 1400, "nivel": "Medio"},  
+    {"lat": 40.4190, "lon": -3.7020, "radio": 1100, "nivel": "Medio"},  
+    {"lat": 40.4080, "lon": -3.6750, "radio": 900, "nivel": "Bajo"}     
 ]
 
-# --- BASES DE AMBULANCIAS --- (de donde salen)
+# --- BASES DE AMBULANCIAS ---
 AMBULATORIOS = [
     {"nombre": "C.S. Chamberí", "lat": 40.4338, "lon": -3.7020},
     {"nombre": "C.S. Pacífico", "lat": 40.4026, "lon": -3.6732},
@@ -65,293 +74,302 @@ AMBULATORIOS = [
     {"nombre": "C.S. Fuencarral", "lat": 40.4901, "lon": -3.6931},
     {"nombre": "C.S. Latina", "lat": 40.3855, "lon": -3.7381}
 ]
-# Precalculamos el nodo más cercano para cada base
 for amb in AMBULATORIOS:
     amb['nodo_red'] = int(ox.distance.nearest_nodes(grafo, X=amb['lon'], Y=amb['lat']))
 
 # ==============================================================================
-# 3. INTERFAZ Y ALGORITMIA ESPACIAL (Automática)
+# 3. PRE-CÁLCULO DEL BUCLE
 # ==============================================================================
-col1, col2 = st.columns([1, 3])
+operativos = []
+NUM_SIMULACIONES = 5  
 
-with col1:
-    st.markdown("### Centro de Mando")
-    st.info("La simulación es totalmente automática. La ambulancia llegará al accidente, evaluará con IA la ciudad y trasladará al paciente.")
-    
-    generar = st.button("🚨 Iniciar Operativo Automático", type="primary", use_container_width=True)
-    
-    # Variables inicializadas vacías para que no de error la primera vez
-    hospitales_datos = []
-    raw_gps_ida = []
-    raw_gps_vuelta = []
-    coords_emergencia = []
-    destino_hospital = None
-    origen_ambulatorio = None
-    mensaje_ia = ""
+if 'simulaciones_generadas' not in st.session_state:
+    for _ in range(NUM_SIMULACIONES):
+        hosp_datos_sim = []
+        for idx, row in df_hospitales.iterrows():
+            hosp_datos_sim.append({
+                "nombre": row['nombre'], "lat": row['lat'], "lon": row['lon'],
+                "nodo_red": int(row['nodo_red']), 
+                "occ": random.randint(30, 98), "wait": random.randint(10, 120)
+            })
 
-    if generar:
-        with st.spinner("IA calculando operativa completa..."):
-            # Generar datos frescos de hospitales
-            for idx, row in df_hospitales.iterrows():
-                hospitales_datos.append({
-                    "nombre": row['nombre'], "lat": row['lat'], "lon": row['lon'],
-                    "nodo_red": int(row['nodo_red']), 
-                    "occ": random.randint(30, 98), "wait": random.randint(10, 120)
-                })
+        acc_valido = False
+        ruta_ida = []
+        ruta_vuelta = []
+        origen_amb = None
+        destino_hosp = None
+        coords_em = []
 
-            # Generar Accidente válido en la red
-            acc_valido = False
-            while not acc_valido:
-                nodo_emergencia = random.choice(lista_nodos)
-                try:
-                    nx.shortest_path(grafo, source=nodo_emergencia, target=df_hospitales.iloc[0]['nodo_red'])
-                    acc_valido = True
-                except nx.NetworkXNoPath: 
-                    continue 
-            
+        while not acc_valido:
+            nodo_emergencia = random.choice(lista_nodos)
             lat_em = grafo.nodes[nodo_emergencia]['y']
             lon_em = grafo.nodes[nodo_emergencia]['x']
-            coords_emergencia = [lat_em, lon_em]
             
-            # Buscar Base más cercana
-            bases_ordenadas = sorted(AMBULATORIOS, key=lambda a: (a['lat'] - lat_em)**2 + (a['lon'] - lon_em)**2)
-            ruta_ida = []
-            
-            for amb in bases_ordenadas:
-                try:
-                    ruta_ida = nx.shortest_path(grafo, source=amb['nodo_red'], target=nodo_emergencia, weight='length')
-                    origen_ambulatorio = amb
-                    break 
-                except nx.NetworkXNoPath: 
-                    continue
-            
-            raw_gps_ida = [[grafo.nodes[n]['y'], grafo.nodes[n]['x']] for n in ruta_ida]
+            try:
+                bases_ordenadas = sorted(AMBULATORIOS, key=lambda a: (a['lat'] - lat_em)**2 + (a['lon'] - lon_em)**2)
+                ruta_ida = nx.shortest_path(grafo, source=bases_ordenadas[0]['nodo_red'], target=nodo_emergencia, weight='length')
+                ruta_vuelta = nx.shortest_path(grafo, source=nodo_emergencia, target=df_hospitales.iloc[0]['nodo_red'], weight='weighted_length')
+                
+                origen_amb = bases_ordenadas[0]
+                destino_hosp = hosp_datos_sim[0]
+                coords_em = [lat_em, lon_em]
+                acc_valido = True 
+            except nx.NetworkXNoPath: 
+                continue 
+        
+        min_coste = float('inf')
+        for h in hosp_datos_sim:
+            try:
+                w_dist = nx.shortest_path_length(grafo, source=nodo_emergencia, target=h['nodo_red'], weight='weighted_length')
+                coste = w_dist + (h['occ'] * 50) + (h['wait'] * 30)
+                if coste < min_coste:
+                    ruta_prueba = nx.shortest_path(grafo, source=nodo_emergencia, target=h['nodo_red'], weight='weighted_length')
+                    min_coste = coste
+                    destino_hosp = h
+                    ruta_vuelta = ruta_prueba
+            except nx.NetworkXNoPath: 
+                continue
+        
+        raw_gps_ida = [[grafo.nodes[n]['y'], grafo.nodes[n]['x']] for n in ruta_ida]
+        raw_gps_vuelta = [[grafo.nodes[n]['y'], grafo.nodes[n]['x']] for n in ruta_vuelta]
+        msg_ia = f"<b>Destino Óptimo Definido</b><br>{destino_hosp['nombre']}<br>Elegido por: Tráfico, Ocupación ({destino_hosp['occ']}%) y Espera."
 
-            # Buscar Hospital Óptimo (IA con Función Objetivo)
-            min_coste = float('inf')
-            ruta_vuelta = []
-            
-            for h in hospitales_datos:
-                try:
-                    w_dist = nx.shortest_path_length(grafo, source=nodo_emergencia, target=h['nodo_red'], weight='weighted_length')
-                    coste = w_dist + (h['occ'] * 50) + (h['wait'] * 30)
-                    
-                    if coste < min_coste:
-                        min_coste = coste
-                        destino_hospital = h
-                        ruta_vuelta = nx.shortest_path(grafo, source=nodo_emergencia, target=h['nodo_red'], weight='weighted_length')
-                except nx.NetworkXNoPath: 
-                    continue
-            
-            raw_gps_vuelta = [[grafo.nodes[n]['y'], grafo.nodes[n]['x']] for n in ruta_vuelta]
-            mensaje_ia = f"<b>Destino Óptimo Definido</b><br>{destino_hospital['nombre']}<br>Elegido por: Tráfico, Ocupación ({destino_hospital['occ']}%) y Espera."
-
-            st.success("✅ **Simulación en curso:**")
-            st.write(f"🩺 **Base salida:** {origen_ambulatorio['nombre']}")
-            st.write(f"🏥 **Destino:** *Misterio (La IA decidirá in-situ)*")
-
-    # Si no se ha generado, mostrar datos de hospitales en 0
-    if not hospitales_datos:
-        for idx, row in df_hospitales.iterrows():
-            hospitales_datos.append({"nombre": row['nombre'], "lat": row['lat'], "lon": row['lon'], "occ": 0, "wait": 0})
-
-with col2:
-    # --- 4. MOTOR VISUAL JAVASCRIPT ---
-    hospitales_json = json.dumps(hospitales_datos)
-    ambu_json = json.dumps(AMBULATORIOS)
-    emergencia_json = json.dumps(coords_emergencia)
-    gps_ida_json = json.dumps(raw_gps_ida)
-    gps_vuelta_json = json.dumps(raw_gps_vuelta)
-    destino_json = json.dumps(destino_hospital) if destino_hospital else "null"
-    msg_json = json.dumps(mensaje_ia)
-    zonas_json = json.dumps(ZONAS_TRAFICO)
+        operativos.append({
+            "hospitales": hosp_datos_sim,
+            "emergencia": coords_em,
+            "gps_ida": raw_gps_ida,
+            "gps_vuelta": raw_gps_vuelta,
+            "destino": destino_hosp,
+            "mensaje": msg_ia
+        })
     
-    html_crudo = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-        <style>
-            html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; background-color: #f4f4f4; }
-            
-            /* RADAR DE PACIENTE CSS PURO */
-            @keyframes pulseRed { 0% { box-shadow: 0 0 0 0 rgba(255, 0, 0, 0.7); } 70% { box-shadow: 0 0 0 15px rgba(255, 0, 0, 0); } 100% { box-shadow: 0 0 0 0 rgba(255, 0, 0, 0); } }
-            .punto-paciente { background-color: #ff0000; border: 2px solid white; border-radius: 50%; animation: pulseRed 1.5s infinite; }
-            
-            .amb-icon { font-size: 32px; text-shadow: 2px 2px 5px rgba(0,0,0,0.8); text-align: center; z-index: 1000 !important; }
-            
-            .hosp-marker { background-color: white; border: 3px solid; border-radius: 50%; text-align: center; line-height: 24px; font-size: 16px; box-shadow: 0 3px 6px rgba(0,0,0,0.4); transition: all 0.5s ease; }
-            .hosp-green { border-color: #2ecc71; }
-            .hosp-orange { border-color: #f39c12; }
-            .hosp-red { border-color: #e74c3c; }
-            .hosp-gris { border-color: #bdc3c7; opacity: 0.8; } 
-            
-            @keyframes glowTarget { 0% { box-shadow: 0 0 5px 2px rgba(52, 152, 219, 0.5); } 50% { box-shadow: 0 0 20px 8px rgba(52, 152, 219, 0.8); } 100% { box-shadow: 0 0 5px 2px rgba(52, 152, 219, 0.5); } }
-            .hosp-target { border-color: #3498db !important; animation: glowTarget 1.5s infinite; z-index: 900 !important; }
-            
-            .ambu-marker { background-color: #e8f4f8; border: 2px solid #3498db; border-radius: 5px; text-align: center; line-height: 22px; font-size: 16px; }
-            .custom-tip { font-family: Arial, sans-serif; font-size: 13px; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); border: none; text-align: center; }
-            .traffic-tip { background-color: rgba(255,255,255,0.9); font-weight: bold; }
-        </style>
-    </head>
-    <body>
-        <div id="map"></div>
-        <script>
-            var map = L.map('map', {preferCanvas: true}).setView([40.4168, -3.7038], 13);
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png').addTo(map);
+    st.session_state['simulaciones_generadas'] = operativos
+else:
+    operativos = st.session_state['simulaciones_generadas']
 
-            // DIBUJAR ZONAS DE TRÁFICO (CÍRCULOS)
-            var zonasTrafico = __ZONAS_TRAFICO__;
-            zonasTrafico.forEach(function(zona) {
-                // Si el tráfico es Bajo, no pintamos nada para mantener el mapa limpio
-                if (zona.nivel === "Bajo") return; 
-                
-                // Colores suaves según el nivel
-                var colorFondo = zona.nivel === "Alto" ? '#ff4d4d' : '#ffcc00'; 
-                var opacidad = 0.15; // Muy transparente
-                
-                var circulo = L.circle([zona.lat, zona.lon], {
-                    radius: zona.radio,
-                    color: colorFondo,
-                    fillColor: colorFondo,
-                    fillOpacity: opacidad,
-                    weight: 1, 
-                    opacity: opacidad + 0.1 
-                });
-                
-                circulo.bindTooltip("🚥 Tráfico: <b>" + zona.nivel + "</b>", {
-                    direction: 'center', 
-                    className: 'custom-tip traffic-tip'
-                });
-                
-                circulo.addTo(map);
-            });
+# ==============================================================================
+# 4. RENDERIZADO DEL MAPA
+# ==============================================================================
+ambu_json = json.dumps(AMBULATORIOS)
+zonas_json = json.dumps(ZONAS_TRAFICO)
+operativos_json = json.dumps(operativos)
 
-            // DIBUJAR AMBULATORIOS
-            var ambulatorios = __AMBULATORIOS__;
-            ambulatorios.forEach(function(a) {
-                var icon = L.divIcon({className: 'ambu-marker', html: '🩺', iconSize: [26,26], iconAnchor: [13,13]});
-                L.marker([a.lat, a.lon], {icon: icon}).bindTooltip("<b>Base SVB</b><br>" + a.nombre, {direction: 'top', className: 'custom-tip'}).addTo(map);
-            });
+html_crudo = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; background-color: #f4f4f4; overflow: hidden; }
+        
+        /* ANIMACIÓN SOS DEL PACIENTE */
+        @keyframes pulseRed { 0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); } 70% { box-shadow: 0 0 0 15px rgba(220, 53, 69, 0); } 100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); } }
+        .punto-paciente { 
+            background-color: #dc3545; border: 2px solid white; border-radius: 50%; 
+            animation: pulseRed 1.5s infinite; color: white; font-weight: bold; 
+            font-size: 9px; text-align: center; line-height: 22px; 
+            box-shadow: 0 2px 5px rgba(0,0,0,0.5); z-index: 1000 !important;
+        }
+        
+        /* EFECTO FLUJO DE DATOS EN LA RUTA */
+        .ruta-holografica { stroke-dasharray: 10, 15; animation: flowDash 1s linear infinite; }
+        @keyframes flowDash { to { stroke-dashoffset: -25; } }
+        
+        .amb-icon { font-size: 32px; text-shadow: 2px 2px 5px rgba(0,0,0,0.8); text-align: center; z-index: 1001 !important; }
+        
+        .hosp-marker { background-color: white; border: 3px solid; border-radius: 50%; text-align: center; line-height: 24px; font-size: 16px; box-shadow: 0 3px 6px rgba(0,0,0,0.4); transition: all 0.5s ease; }
+        .hosp-green { border-color: #2ecc71; }
+        .hosp-orange { border-color: #f39c12; }
+        .hosp-red { border-color: #e74c3c; }
+        
+        @keyframes glowTarget { 0% { box-shadow: 0 0 5px 2px rgba(52, 152, 219, 0.5); } 50% { box-shadow: 0 0 20px 8px rgba(52, 152, 219, 0.8); } 100% { box-shadow: 0 0 5px 2px rgba(52, 152, 219, 0.5); } }
+        .hosp-target { border-color: #3498db !important; animation: glowTarget 1.5s infinite; z-index: 900 !important; transform: scale(1.2); }
+        
+        /* CSS DE LAS BASES */
+        .ambu-marker { background-color: #e8f4f8; border: 2px solid #3498db; border-radius: 5px; text-align: center; line-height: 22px; font-size: 16px; }
+        .custom-tip { font-family: Arial, sans-serif; font-size: 13px; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); border: none; text-align: center; }
+        .traffic-tip { background-color: rgba(255,255,255,0.9); font-weight: bold; }
+        
+        /* CSS DE LAS BARRAS DE PROGRESO DE HOSPITALES */
+        .progress-bg { background: #e0e0e0; width: 100%; height: 8px; border-radius: 4px; margin-top: 4px; overflow: hidden; }
+        .progress-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <script>
+        // CÁMARA MANUAL: Se centra en Madrid y no se mueve sola nunca más.
+        var map = L.map('map', {preferCanvas: true}).setView([40.4168, -3.7038], 13);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png').addTo(map);
 
-            // DIBUJAR HOSPITALES 
-            var hospitalMarkers = {}; 
-            var hospitales = __HOSPITALES__;
-            var destHosp = __DESTINO_IA__;
-            var haySimulacion = (__GPS_IDA__.length > 0);
-            
-            hospitales.forEach(function(h) {
-                var colorClass = (!haySimulacion || h.occ === 0) ? 'hosp-gris' : (h.occ > 85 ? 'hosp-red' : (h.occ > 50 ? 'hosp-orange' : 'hosp-green'));
+        // ZONAS DE TRÁFICO
+        var zonasTrafico = __ZONAS_TRAFICO__;
+        zonasTrafico.forEach(function(zona) {
+            if (zona.nivel === "Bajo") return; 
+            var colorFondo = zona.nivel === "Alto" ? '#ff4d4d' : '#ffcc00'; 
+            var circulo = L.circle([zona.lat, zona.lon], { radius: zona.radio, color: colorFondo, fillColor: colorFondo, fillOpacity: 0.15, weight: 1, opacity: 0.25 });
+            circulo.bindTooltip("🚥 Tráfico: <b>" + zona.nivel + "</b>", { direction: 'center', className: 'custom-tip traffic-tip' }).addTo(map);
+        });
+
+        // BASES AMBULATORIOS
+        var ambulatorios = __AMBULATORIOS__;
+        ambulatorios.forEach(function(a) {
+            var icon = L.divIcon({className: 'ambu-marker', html: '🩺', iconSize: [26,26], iconAnchor: [13,13]});
+            L.marker([a.lat, a.lon], {icon: icon}).bindTooltip("<b>Base SVB</b><br>" + a.nombre, {direction: 'top', className: 'custom-tip'}).addTo(map);
+        });
+
+        var operativos = __OPERATIVOS__;
+        var currentIndex = 0;
+        var markerAmb = null;
+        var woundedMarker = null;
+        var polylineVuelta = null;
+        var hospitalMarkers = {};
+
+        // Función para densificar y hacer fluido el movimiento
+        function densificar(ruta, maxDist) {
+            var nueva = [];
+            for(var i=0; i<ruta.length-1; i++) {
+                var p1 = ruta[i], p2 = ruta[i+1];
+                var dist = Math.sqrt(Math.pow(p2[0]-p1[0],2) + Math.pow(p2[1]-p1[1],2));
+                var pasos = Math.max(1, Math.ceil(dist / maxDist));
+                for(var j=0; j<pasos; j++) nueva.push([p1[0] + (p2[0]-p1[0])*(j/pasos), p1[1] + (p2[1]-p1[1])*(j/pasos)]);
+            }
+            nueva.push(ruta[ruta.length-1]);
+            return nueva;
+        }
+
+        // Actualizar datos de hospitales (sin ponerlos grises nunca)
+        function actualizarHospitales(hospData) {
+            hospData.forEach(function(h) {
+                var colorClass = (h.occ > 85 ? 'hosp-red' : (h.occ > 50 ? 'hosp-orange' : 'hosp-green'));
+                var barColor = h.occ > 85 ? '#e74c3c' : (h.occ > 50 ? '#f39c12' : '#2ecc71');
                 
                 var icon = L.divIcon({className: 'hosp-marker ' + colorClass, html: '🏥', iconSize: [30,30], iconAnchor: [15,15]});
-                var markerHosp = L.marker([h.lat, h.lon], {icon: icon});
                 
-                if (h.occ > 0) {
-                    var tipHTML = `<b>${h.nombre}</b><hr style="margin:4px 0;">🛏️ Ocupación: <b>${h.occ}%</b><br>⏱️ Espera: <b>${h.wait} min</b>`;
-                    markerHosp.bindTooltip(tipHTML, {direction: 'top', offset: [0, -15], className: 'custom-tip'});
-                } else {
-                    markerHosp.bindTooltip(`<b>${h.nombre}</b><br><i>Esperando IA...</i>`, {direction: 'top', offset: [0, -15], className: 'custom-tip'});
+                if (!hospitalMarkers[h.nombre]) {
+                    hospitalMarkers[h.nombre] = L.marker([h.lat, h.lon]).addTo(map);
                 }
                 
-                markerHosp.addTo(map);
-                hospitalMarkers[h.nombre] = markerHosp; 
+                var marker = hospitalMarkers[h.nombre];
+                marker.setIcon(icon);
+                
+                var tipHTML = `
+                    <div style="text-align: left;">
+                        <center><b>${h.nombre}</b></center><hr style="margin:4px 0;">
+                        🛏️ Ocupación: <b>${h.occ}%</b>
+                        <div class="progress-bg"><div class="progress-fill" style="width: ${h.occ}%; background-color: ${barColor};"></div></div>
+                        <div style="margin-top: 4px;">⏱️ Espera: <b>${h.wait} min</b></div>
+                    </div>`;
+                marker.bindTooltip(tipHTML, {direction: 'top', offset: [0, -15], className: 'custom-tip'});
             });
+        }
 
-            // ANIMACIÓN AUTOMÁTICA
-            var coordAccidente = __EMERGENCIA__;
-            var gpsIda = __GPS_IDA__;
-            var gpsVuelta = __GPS_VUELTA__;
-            var msgFase2 = __MSG_FASE2__;
+        function limpiarMapa() {
+            if(markerAmb) map.removeLayer(markerAmb);
+            if(woundedMarker) map.removeLayer(woundedMarker);
+            if(polylineVuelta) map.removeLayer(polylineVuelta);
+        }
 
-            function densificar(ruta, maxDist) {
-                var nueva = [];
-                for(var i=0; i<ruta.length-1; i++) {
-                    var p1 = ruta[i], p2 = ruta[i+1];
-                    var dist = Math.sqrt(Math.pow(p2[0]-p1[0],2) + Math.pow(p2[1]-p1[1],2));
-                    var pasos = Math.max(1, Math.ceil(dist / maxDist));
-                    for(var j=0; j<pasos; j++) nueva.push([p1[0] + (p2[0]-p1[0])*(j/pasos), p1[1] + (p2[1]-p1[1])*(j/pasos)]);
-                }
-                nueva.push(ruta[ruta.length-1]);
-                return nueva;
-            }
+        function ejecutarBucle() {
+            // Loop infinito: cuando acaba las precargadas, vuelve a la 0
+            if (currentIndex >= operativos.length) currentIndex = 0; 
+            
+            var op = operativos[currentIndex];
+            limpiarMapa();
+            actualizarHospitales(op.hospitales); 
+            
+            var gpsIda = op.gps_ida;
+            var gpsVuelta = op.gps_vuelta;
+            var coordAccidente = gpsIda[gpsIda.length - 1]; // ANCLAJE SEGURO DEL SOS
+            
+            // 1. DIBUJAMOS EL SOS
+            var woundedIcon = L.divIcon({className: 'punto-paciente', html: 'SOS', iconSize: [26, 26], iconAnchor: [13, 13]});
+            woundedMarker = L.marker(coordAccidente, {icon: woundedIcon}).addTo(map);
 
-            var velocidadLenta = 25;
+            // 2. CREAR AMBULANCIA
+            var ambIcon = L.divIcon({className: 'amb-icon', html: '🚑', iconSize: [32, 32], iconAnchor: [16, 16]});
+            markerAmb = L.marker(gpsIda[0], {icon: ambIcon}).addTo(map);
 
-            if (haySimulacion) {
-                var woundedIcon = L.divIcon({className: 'punto-paciente', html: '', iconSize: [18, 18], iconAnchor: [9, 9]});
-                var woundedMarker = L.marker(coordAccidente, {icon: woundedIcon}).addTo(map);
-                
-                map.fitBounds(L.latLngBounds([gpsIda[0], coordAccidente, [destHosp.lat, destHosp.lon]]), {padding: [50, 50]});
+            // RUTA IDA Y VUELTA ULTRA FLUIDA
+            var idaSuave = densificar(gpsIda, 0.0001);
+            var vueltaSuave = densificar(gpsVuelta, 0.0001);
+            var frameIndex = 0;
+            
+            // VELOCIDADES
+            var velocidadIda = 10;
+            var velocidadVuelta = 20;
+            
+            function animarIda() {
+                if(frameIndex < idaSuave.length) { 
+                    markerAmb.setLatLng(idaSuave[frameIndex]); 
+                    frameIndex++;
+                    setTimeout(animarIda, velocidadIda); 
+                } else {
+                    markerAmb.setLatLng(coordAccidente); // Seguro final al SOS
+                    markerAmb.bindPopup("<b>🚨 Paciente localizado.</b><br>Evaluando constantes e IA de hospitales...").openPopup();
+                    
+                    setTimeout(function() {
+                        markerAmb.closePopup();
+                        map.removeLayer(woundedMarker); 
+                        
+                        // Resaltar destino (el resto se quedan con su color original, sin apagarse)
+                        var markerTarget = hospitalMarkers[op.destino.nombre];
+                        if(markerTarget) {
+                            markerTarget.setIcon(L.divIcon({className: 'hosp-marker hosp-target', html: '🏥🏁', iconSize: [36,36], iconAnchor: [18,18]}));
+                            // AQUI ESTA EL CAMBIO: Usamos bindTooltip en lugar de openPopup para que solo se vea al pasar el ratón
+                            markerTarget.bindTooltip(op.mensaje, {direction: 'top', offset: [0, -15], className: 'custom-tip'});
+                        }
 
-                var ambIcon = L.divIcon({className: 'amb-icon', html: '🚑', iconSize: [32, 32], iconAnchor: [16, 16]});
-                var markerAmb = L.marker(gpsIda[0], {icon: ambIcon}).addTo(map);
-
-                var idaSuave = densificar(gpsIda, 0.00015);
-                var vueltaSuave = densificar(gpsVuelta, 0.00015);
-                var frameIndex = 0;
-                
-                function animarIda() {
-                    if(frameIndex < idaSuave.length) { 
-                        markerAmb.setLatLng(idaSuave[frameIndex]); 
-                        frameIndex++;
-                        setTimeout(animarIda, velocidadLenta); 
-                    } else {
-                        markerAmb.bindPopup("<b>🚨 Paciente localizado.</b><br>Evaluando constantes e IA de hospitales...").openPopup();
+                        // LÍNEA DISCONTINUA DE VUELTA
+                        polylineVuelta = L.polyline(gpsVuelta, {color: '#3498db', weight: 2.5, dashArray: '10, 10', className: 'ruta-holografica', opacity: 0.8}).addTo(map);
                         
                         setTimeout(function() {
-                            markerAmb.closePopup();
-                            map.removeLayer(woundedMarker);
-                            
-                            if(destHosp) {
-                                var markerTarget = hospitalMarkers[destHosp.nombre];
-                                if(markerTarget) {
-                                    var iconTarget = L.divIcon({
-                                        className: 'hosp-marker hosp-target', 
-                                        html: '🏥🏁', 
-                                        iconSize: [36,36], iconAnchor: [18,18]
-                                    });
-                                    markerTarget.setIcon(iconTarget);
-                                    markerTarget.bindPopup("<b>🏁 DESTINO ÓPTIMO ASIGNADO</b><br>" + msgFase2).openPopup();
-                                }
-                            }
-                            
-                            setTimeout(function() {
-                                if(markerTarget) markerTarget.closePopup();
-                                frameIndex = 0;
-                                animarVuelta(); 
-                            }, 2500);
+                            frameIndex = 0;
+                            animarVuelta(); 
+                        }, 2500);
 
-                        }, 3000);
-                    }
+                    }, 3000); 
                 }
-
-                function animarVuelta() {
-                    if(frameIndex < vueltaSuave.length) { 
-                        markerAmb.setLatLng(vueltaSuave[frameIndex]); 
-                        frameIndex++;
-                        setTimeout(animarVuelta, velocidadLenta); 
-                    } else {
-                        markerAmb.bindPopup("<h3 style='color:green; margin:0;'>✅ Llegada a Destino</h3>Paciente entregado.").openPopup();
-                    }
-                }
-                
-                setTimeout(animarIda, 1500);
             }
-        </script>
-    </body>
-    </html>
-    """
-    
-    html_mapa = html_crudo.replace("__ZONAS_TRAFICO__", zonas_json)\
-                          .replace("__HOSPITALES__", hospitales_json)\
-                          .replace("__AMBULATORIOS__", ambu_json)\
-                          .replace("__EMERGENCIA__", emergencia_json)\
-                          .replace("__GPS_IDA__", gps_ida_json)\
-                          .replace("__GPS_VUELTA__", gps_vuelta_json)\
-                          .replace("__DESTINO_IA__", destino_json)\
-                          .replace("__MSG_FASE2__", msg_json)
 
-    components.html(html_mapa, height=650)
+            function animarVuelta() {
+                if(frameIndex < vueltaSuave.length) { 
+                    markerAmb.setLatLng(vueltaSuave[frameIndex]); 
+                    frameIndex++;
+                    setTimeout(animarVuelta, velocidadVuelta); 
+                } else {
+                    markerAmb.bindPopup("<h3 style='color:green; margin:0;'>✅ Llegada a Destino</h3>Paciente entregado.").openPopup();
+                    
+                    // ESPERAR 5 SEGUNDOS Y LANZAR LA SIGUIENTE EMERGENCIA
+                    setTimeout(function() {
+                        markerAmb.closePopup();
+                        currentIndex++;
+                        ejecutarBucle(); 
+                    }, 5000);
+                }
+            }
+            
+            setTimeout(animarIda, 1000);
+        }
+
+        // CARGA INICIAL
+        actualizarHospitales(operativos[0].hospitales);
+        
+        // Arranca el bucle a los 5 segundos exactos
+        setTimeout(function() {
+            ejecutarBucle();
+        }, 5000);
+
+    </script>
+</body>
+</html>
+"""
+
+html_mapa = html_crudo.replace("__ZONAS_TRAFICO__", zonas_json)\
+                      .replace("__AMBULATORIOS__", ambu_json)\
+                      .replace("__OPERATIVOS__", operativos_json)
+
+components.html(html_mapa, height=1000)
 
