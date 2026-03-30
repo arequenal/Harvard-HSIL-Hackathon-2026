@@ -5,7 +5,6 @@ import pandas as pd
 import random
 import json
 import streamlit.components.v1 as components
-import numpy as np 
 
 # ==============================================================================
 # 1. CONFIGURACIÓN DE LA PÁGINA
@@ -17,44 +16,43 @@ st.title("🚑 Smart City: Enrutamiento Dinámico e Inteligencia de Tráfico")
 # 2. CARGA DE DATOS Y MOTOR DE TRÁFICO GLOBAL (En Caché)
 # ==============================================================================
 @st.cache_resource
-def load_graph_with_traffic_and_quartiles():
+def load_graph_with_traffic():
+    # Solo cargamos el grafo y asignamos pesos para la IA matemática.
     G = ox.load_graphml("madrid_grafo.graphml")
-    print("Simulando tráfico global...")
-    traffic_factors = []
+    print("Calculando pesos de tráfico en el grafo...")
     
     for u, v, key, data in G.edges(keys=True, data=True):
         traffic_factor = random.uniform(1.0, 3.0)
         data['traffic_factor'] = traffic_factor
-        data['weighted_length'] = data['length'] * traffic_factor
-        traffic_factors.append(traffic_factor)
-    
-    p25, p50, p75 = np.percentile(traffic_factors, [25, 50, 75])
-    banda1, banda2, banda3, banda4 = [], [], [], []
-    
-    for u, v, data in G.edges(data=True):
-        if 'geometry' in data:
-            coords = [[y, x] for x, y in list(data['geometry'].coords)]
-        else:
-            coords = [[G.nodes[u]['y'], G.nodes[u]['x']], [G.nodes[v]['y'], G.nodes[v]['x']]]
+        data['weighted_length'] = data.get('length', 1.0) * traffic_factor
             
-        factor = data.get('traffic_factor', 1.0)
-        if factor <= p25: banda1.append(coords)
-        elif factor <= p50: banda2.append(coords)
-        elif factor <= p75: banda3.append(coords)
-        else: banda4.append(coords)
-            
-    return G, banda1, banda2, banda3, banda4
+    return G
 
 @st.cache_data
 def cargar_hospitales():
     return pd.read_csv("hospitales_madrid_nodos.csv")
 
 with st.spinner("Cargando cerebro de la ciudad de Madrid..."):
-    grafo, calles_banda1, calles_banda2, calles_banda3, calles_banda4 = load_graph_with_traffic_and_quartiles()
+    grafo = load_graph_with_traffic()
     df_hospitales = cargar_hospitales()
     lista_nodos = list(grafo.nodes())
 
-# --- BASES DE AMBULANCIAS ---
+# --- ZONAS DE TRÁFICO (Basadas en Puntos Negros reales de Madrid) ---
+ZONAS_TRAFICO = [
+    # ALTO TRÁFICO (Puntos Negros de congestión y accidentes reales)
+    {"lat": 40.4215, "lon": -3.6590, "radio": 1500, "nivel": "Alto"},   # Nudo Este / M-23 (O'Donnell)
+    {"lat": 40.3920, "lon": -3.6850, "radio": 1600, "nivel": "Alto"},   # Méndez Álvaro / Entradas M-30 Sur
+    {"lat": 40.4490, "lon": -3.6450, "radio": 1300, "nivel": "Alto"},   # A-2 km 5 (Puente de la Cea)
+    
+    # MEDIO TRÁFICO (Zonas céntricas y comerciales)
+    {"lat": 40.4650, "lon": -3.6880, "radio": 1400, "nivel": "Medio"},  # Nudo Norte / Castellana
+    {"lat": 40.4190, "lon": -3.7020, "radio": 1100, "nivel": "Medio"},  # Centro Histórico / Gran Vía
+    
+    # BAJO TRÁFICO (El mapa no pintará nada aquí para no molestar visualmente)
+    {"lat": 40.4080, "lon": -3.6750, "radio": 900, "nivel": "Bajo"}     # Zona residencial Pacífico
+]
+
+# --- BASES DE AMBULANCIAS --- (de donde salen)
 AMBULATORIOS = [
     {"nombre": "C.S. Chamberí", "lat": 40.4338, "lon": -3.7020},
     {"nombre": "C.S. Pacífico", "lat": 40.4026, "lon": -3.6732},
@@ -67,6 +65,7 @@ AMBULATORIOS = [
     {"nombre": "C.S. Fuencarral", "lat": 40.4901, "lon": -3.6931},
     {"nombre": "C.S. Latina", "lat": 40.3855, "lon": -3.7381}
 ]
+# Precalculamos el nodo más cercano para cada base
 for amb in AMBULATORIOS:
     amb['nodo_red'] = int(ox.distance.nearest_nodes(grafo, X=amb['lon'], Y=amb['lat']))
 
@@ -81,7 +80,7 @@ with col1:
     
     generar = st.button("🚨 Iniciar Operativo Automático", type="primary", use_container_width=True)
     
-    # Variables inicializadas vacías para que no de error
+    # Variables inicializadas vacías para que no de error la primera vez
     hospitales_datos = []
     raw_gps_ida = []
     raw_gps_vuelta = []
@@ -100,7 +99,7 @@ with col1:
                     "occ": random.randint(30, 98), "wait": random.randint(10, 120)
                 })
 
-            # Generar Accidente
+            # Generar Accidente válido en la red
             acc_valido = False
             while not acc_valido:
                 nodo_emergencia = random.choice(lista_nodos)
@@ -128,7 +127,7 @@ with col1:
             
             raw_gps_ida = [[grafo.nodes[n]['y'], grafo.nodes[n]['x']] for n in ruta_ida]
 
-            # Buscar Hospital Óptimo (IA con Tráfico)
+            # Buscar Hospital Óptimo (IA con Función Objetivo)
             min_coste = float('inf')
             ruta_vuelta = []
             
@@ -165,11 +164,7 @@ with col2:
     gps_vuelta_json = json.dumps(raw_gps_vuelta)
     destino_json = json.dumps(destino_hospital) if destino_hospital else "null"
     msg_json = json.dumps(mensaje_ia)
-
-    b1_json = json.dumps(calles_banda1)
-    b2_json = json.dumps(calles_banda2)
-    b3_json = json.dumps(calles_banda3)
-    b4_json = json.dumps(calles_banda4)
+    zonas_json = json.dumps(ZONAS_TRAFICO)
     
     html_crudo = """
     <!DOCTYPE html>
@@ -198,6 +193,7 @@ with col2:
             
             .ambu-marker { background-color: #e8f4f8; border: 2px solid #3498db; border-radius: 5px; text-align: center; line-height: 22px; font-size: 16px; }
             .custom-tip { font-family: Arial, sans-serif; font-size: 13px; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); border: none; text-align: center; }
+            .traffic-tip { background-color: rgba(255,255,255,0.9); font-weight: bold; }
         </style>
     </head>
     <body>
@@ -206,16 +202,32 @@ with col2:
             var map = L.map('map', {preferCanvas: true}).setView([40.4168, -3.7038], 13);
             L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png').addTo(map);
 
-            // DIBUJAR TRÁFICO
-            var estiloB1 = { color: '#f0f0f0', weight: 1.5, opacity: 0.3 }; 
-            var estiloB2 = { color: '#e0e0e0', weight: 2.0, opacity: 0.4 }; 
-            var estiloB3 = { color: '#d0d0d0', weight: 2.5, opacity: 0.5 }; 
-            var estiloB4 = { color: '#b0b0b0', weight: 3.0, opacity: 0.6 }; 
-            
-            L.polyline(__C_BANDA1__, estiloB1).addTo(map);
-            L.polyline(__C_BANDA2__, estiloB2).addTo(map);
-            L.polyline(__C_BANDA3__, estiloB3).addTo(map);
-            L.polyline(__C_BANDA4__, estiloB4).addTo(map);
+            // DIBUJAR ZONAS DE TRÁFICO (CÍRCULOS)
+            var zonasTrafico = __ZONAS_TRAFICO__;
+            zonasTrafico.forEach(function(zona) {
+                // Si el tráfico es Bajo, no pintamos nada para mantener el mapa limpio
+                if (zona.nivel === "Bajo") return; 
+                
+                // Colores suaves según el nivel
+                var colorFondo = zona.nivel === "Alto" ? '#ff4d4d' : '#ffcc00'; 
+                var opacidad = 0.15; // Muy transparente
+                
+                var circulo = L.circle([zona.lat, zona.lon], {
+                    radius: zona.radio,
+                    color: colorFondo,
+                    fillColor: colorFondo,
+                    fillOpacity: opacidad,
+                    weight: 1, 
+                    opacity: opacidad + 0.1 
+                });
+                
+                circulo.bindTooltip("🚥 Tráfico: <b>" + zona.nivel + "</b>", {
+                    direction: 'center', 
+                    className: 'custom-tip traffic-tip'
+                });
+                
+                circulo.addTo(map);
+            });
 
             // DIBUJAR AMBULATORIOS
             var ambulatorios = __AMBULATORIOS__;
@@ -231,7 +243,6 @@ with col2:
             var haySimulacion = (__GPS_IDA__.length > 0);
             
             hospitales.forEach(function(h) {
-                // Al principio, si no hay simulación están en gris. Si la hay, tienen sus colores de ocupación normales.
                 var colorClass = (!haySimulacion || h.occ === 0) ? 'hosp-gris' : (h.occ > 85 ? 'hosp-red' : (h.occ > 50 ? 'hosp-orange' : 'hosp-green'));
                 
                 var icon = L.divIcon({className: 'hosp-marker ' + colorClass, html: '🏥', iconSize: [30,30], iconAnchor: [15,15]});
@@ -266,17 +277,14 @@ with col2:
                 return nueva;
             }
 
-            var velocidadLenta = 25; // Aumentamos este número para que vaya más LENTA
+            var velocidadLenta = 25;
 
             if (haySimulacion) {
-                // 1. DIBUJAR HERIDO
                 var woundedIcon = L.divIcon({className: 'punto-paciente', html: '', iconSize: [18, 18], iconAnchor: [9, 9]});
                 var woundedMarker = L.marker(coordAccidente, {icon: woundedIcon}).addTo(map);
                 
-                // Encuadrar base -> accidente -> destino todo de golpe para que no pegue saltos
                 map.fitBounds(L.latLngBounds([gpsIda[0], coordAccidente, [destHosp.lat, destHosp.lon]]), {padding: [50, 50]});
 
-                // 2. CREAR AMBULANCIA
                 var ambIcon = L.divIcon({className: 'amb-icon', html: '🚑', iconSize: [32, 32], iconAnchor: [16, 16]});
                 var markerAmb = L.marker(gpsIda[0], {icon: ambIcon}).addTo(map);
 
@@ -284,21 +292,18 @@ with col2:
                 var vueltaSuave = densificar(gpsVuelta, 0.00015);
                 var frameIndex = 0;
                 
-                // FASE 1: IDA
                 function animarIda() {
                     if(frameIndex < idaSuave.length) { 
                         markerAmb.setLatLng(idaSuave[frameIndex]); 
                         frameIndex++;
                         setTimeout(animarIda, velocidadLenta); 
                     } else {
-                        // LLEGADA AL PACIENTE - PAUSA DE 3 SEGUNDOS
                         markerAmb.bindPopup("<b>🚨 Paciente localizado.</b><br>Evaluando constantes e IA de hospitales...").openPopup();
                         
                         setTimeout(function() {
                             markerAmb.closePopup();
-                            map.removeLayer(woundedMarker); // Paciente en ambulancia
+                            map.removeLayer(woundedMarker);
                             
-                            // LA REVELACIÓN DEL DESTINO
                             if(destHosp) {
                                 var markerTarget = hospitalMarkers[destHosp.nombre];
                                 if(markerTarget) {
@@ -307,23 +312,21 @@ with col2:
                                         html: '🏥🏁', 
                                         iconSize: [36,36], iconAnchor: [18,18]
                                     });
-                                    markerTarget.setIcon(iconTarget); // Se vuelve azul!
+                                    markerTarget.setIcon(iconTarget);
                                     markerTarget.bindPopup("<b>🏁 DESTINO ÓPTIMO ASIGNADO</b><br>" + msgFase2).openPopup();
                                 }
                             }
                             
-                            // PAUSA DE 2 SEGUNDOS PARA LEER EL DESTINO ANTES DE ARRANCAR
                             setTimeout(function() {
                                 if(markerTarget) markerTarget.closePopup();
                                 frameIndex = 0;
                                 animarVuelta(); 
                             }, 2500);
 
-                        }, 3000); // 3000ms = 3 segundos de evaluación
+                        }, 3000);
                     }
                 }
 
-                // FASE 2: VUELTA
                 function animarVuelta() {
                     if(frameIndex < vueltaSuave.length) { 
                         markerAmb.setLatLng(vueltaSuave[frameIndex]); 
@@ -334,7 +337,6 @@ with col2:
                     }
                 }
                 
-                // ARRANCAR TODO A LOS 1.5 SEGUNDOS DE PULSAR EL BOTÓN
                 setTimeout(animarIda, 1500);
             }
         </script>
@@ -342,10 +344,7 @@ with col2:
     </html>
     """
     
-    html_mapa = html_crudo.replace("__C_BANDA1__", b1_json)\
-                          .replace("__C_BANDA2__", b2_json)\
-                          .replace("__C_BANDA3__", b3_json)\
-                          .replace("__C_BANDA4__", b4_json)\
+    html_mapa = html_crudo.replace("__ZONAS_TRAFICO__", zonas_json)\
                           .replace("__HOSPITALES__", hospitales_json)\
                           .replace("__AMBULATORIOS__", ambu_json)\
                           .replace("__EMERGENCIA__", emergencia_json)\
@@ -355,3 +354,4 @@ with col2:
                           .replace("__MSG_FASE2__", msg_json)
 
     components.html(html_mapa, height=650)
+
