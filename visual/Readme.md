@@ -29,4 +29,4 @@ Ejecuta este comando, te abrirá una pestaña en el navegador:
 ```bash
 python -m streamlit run prototipo_ambulancIA.py
 ```
-*Aviso*: tarda un poco en cargar y solo genera 5 ambulancias distintas, después se empiezan a repetir. Para aumentar este número cambiar el valor de la variable NUM_SIMULACIONES, pero aumentará el tiempo inicial de carga.
+**AVISO**: tarda un poco en cargar y solo genera 5 ambulancias distintas, después se empiezan a repetir. Para aumentar este número cambiar el valor de la variable NUM_SIMULACIONES, pero aumentará el tiempo inicial de carga.
