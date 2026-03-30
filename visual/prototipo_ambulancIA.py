@@ -30,6 +30,21 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# --- PANTALLA DE CARGA PERSONALIZADA ---
+pantalla_carga = st.empty()
+pantalla_carga.markdown("""
+    <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background-color: #121212; z-index: 9999; display: flex; flex-direction: column; justify-content: center; align-items: center; color: white; font-family: sans-serif;">
+        <div style="font-size: 80px; animation: pulse 1.5s infinite;">🚑</div>
+        <h1 style="margin-top: 20px; font-weight: 600; letter-spacing: 2px;">Cargando Ambulanc<span style="color: #dc3545;">IA</span></h1>
+        <p style="color: #aaa; margin-top: 10px; font-size: 18px;">Preparando a todo el personal sanitario...</p>
+        <div style="margin-top: 40px; width: 60px; height: 60px; border: 6px solid #333; border-top-color: #dc3545; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+    </div>
+    <style>
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.15); } 100% { transform: scale(1); } }
+    </style>
+""", unsafe_allow_html=True)
+
 # ==============================================================================
 # 2. CARGA DE DATOS Y MOTOR DE TRÁFICO GLOBAL (En Caché)
 # ==============================================================================
@@ -46,10 +61,9 @@ def load_graph_with_traffic():
 def cargar_hospitales():
     return pd.read_csv("hospitales_madrid_nodos.csv")
 
-with st.spinner("Iniciando Dashboard Autónomo de la Ciudad (Calculando red)..."):
-    grafo = load_graph_with_traffic()
-    df_hospitales = cargar_hospitales()
-    lista_nodos = list(grafo.nodes())
+grafo = load_graph_with_traffic()
+df_hospitales = cargar_hospitales()
+lista_nodos = list(grafo.nodes())
 
 # --- ZONAS DE TRÁFICO ---
 ZONAS_TRAFICO = [
@@ -146,6 +160,9 @@ if 'simulaciones_generadas' not in st.session_state:
     st.session_state['simulaciones_generadas'] = operativos
 else:
     operativos = st.session_state['simulaciones_generadas']
+
+# ELIMINAR LA PANTALLA DE CARGA UNA VEZ TERMINADOS LOS CÁLCULOS
+pantalla_carga.empty()
 
 # ==============================================================================
 # 4. RENDERIZADO DEL MAPA
@@ -318,7 +335,7 @@ html_crudo = """
                         var markerTarget = hospitalMarkers[op.destino.nombre];
                         if(markerTarget) {
                             markerTarget.setIcon(L.divIcon({className: 'hosp-marker hosp-target', html: '🏥🏁', iconSize: [36,36], iconAnchor: [18,18]}));
-                            // AQUI ESTA EL CAMBIO: Usamos bindTooltip en lugar de openPopup para que solo se vea al pasar el ratón
+                            // Usamos bindTooltip en lugar de openPopup para que solo se vea al pasar el ratón
                             markerTarget.bindTooltip(op.mensaje, {direction: 'top', offset: [0, -15], className: 'custom-tip'});
                         }
 
@@ -357,10 +374,10 @@ html_crudo = """
         // CARGA INICIAL
         actualizarHospitales(operativos[0].hospitales);
         
-        // Arranca el bucle a los 5 segundos exactos
+        // Arranca el bucle a los 2 segundos exactos después de cargar el mapa
         setTimeout(function() {
             ejecutarBucle();
-        }, 5000);
+        }, 2000);
 
     </script>
 </body>
