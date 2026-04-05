@@ -11,6 +11,7 @@ BASE_DIR = Path(__file__).resolve().parent
 GRAPH_PATH = BASE_DIR / "madrid_grafo.graphml"
 HOSPITALES_PATH = BASE_DIR / "hospitales_madrid_nodos.csv"
 PROCESSED_HOSPITALES_PATH = BASE_DIR.parent / "analisis_datos" / "data" / "processed" / "centros_servicios_establecimientos_sanitarios_limpio.csv"
+SAMUR_BASES_PATH = BASE_DIR.parent / "analisis_datos" / "data" / "processed" / "bases_samur_madrid.csv"
 
 # ==============================================================================
 # 1. CONFIGURACIÓN DE LA PÁGINA (Pantalla completa real)
@@ -65,27 +66,56 @@ def load_graph_with_traffic():
 
 @st.cache_data
 def cargar_hospitales(_grafo):
+    df = pd.DataFrame()
+
     if PROCESSED_HOSPITALES_PATH.exists():
+        # Main source: curated processed hospitals dataset.
         df = pd.read_csv(PROCESSED_HOSPITALES_PATH, sep=";")
-        # Keep only Madrid centers for consistency with the Madrid road graph.
-        if "municipio" in df.columns:
-            df = df[df["municipio"].astype(str).str.lower() == "madrid"].copy()
+        allowed_center_types = {"Hospital general", "Hospital especializado"}
+        if "centro_tipo" in df.columns:
+            df = df[df["centro_tipo"].isin(allowed_center_types)].copy()
 
-        # Adapt processed schema to app schema.
+        if "centro_id" not in df.columns:
+            df["centro_id"] = df.index.astype(str)
+        df["centro_id"] = df["centro_id"].astype(str).str.strip()
+
+        # Enrich names from legacy matched file when available.
+        if HOSPITALES_PATH.exists():
+            legacy_df = pd.read_csv(HOSPITALES_PATH)
+            if {"centro_id", "nombre"}.issubset(legacy_df.columns):
+                legacy_df = legacy_df[["centro_id", "nombre"]].copy()
+                legacy_df["centro_id"] = legacy_df["centro_id"].astype(str).str.strip()
+                legacy_df["nombre"] = legacy_df["nombre"].astype(str).str.strip()
+                legacy_df = legacy_df[legacy_df["nombre"] != ""].drop_duplicates(subset=["centro_id"], keep="first")
+                df = df.merge(legacy_df, on="centro_id", how="left", suffixes=("", "_legacy"))
+
         if "nombre" not in df.columns:
-            df["nombre"] = df["centro_id"].astype(str)
+            df["nombre"] = ""
+        if "nombre_legacy" in df.columns:
+            df["nombre"] = df["nombre"].fillna("").astype(str).str.strip()
+            df["nombre_legacy"] = df["nombre_legacy"].fillna("").astype(str).str.strip()
+            df["nombre"] = df["nombre"].where(df["nombre"] != "", df["nombre_legacy"])
+            df = df.drop(columns=["nombre_legacy"])
 
-        for col in ["lat", "lon"]:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-        df = df[df["lat"].notna() & df["lon"].notna()].copy()
+        df["nombre"] = df["nombre"].fillna("").astype(str).str.strip()
+        df["nombre"] = df["nombre"].where(df["nombre"] != "", "Hospital " + df["centro_id"])
+    elif HOSPITALES_PATH.exists():
+        # Last fallback.
+        df = pd.read_csv(HOSPITALES_PATH)
+        if "centro_id" not in df.columns:
+            df["centro_id"] = df.index.astype(str)
+        if "nombre" not in df.columns:
+            df["nombre"] = "Hospital " + df["centro_id"].astype(str)
 
+    for col in ["lat", "lon"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df[df["lat"].notna() & df["lon"].notna()].copy()
+
+    if not df.empty:
         df["nodo_red"] = df.apply(
             lambda row: int(ox.distance.nearest_nodes(_grafo, X=float(row["lon"]), Y=float(row["lat"]))),
             axis=1,
         )
-    else:
-        # Backward-compatible fallback.
-        df = pd.read_csv(HOSPITALES_PATH)
 
     # Ensure optional enrichment columns always exist for tooltip rendering.
     for col in ["direccion_completa", "especialidades_texto", "perfiles_atencion"]:
@@ -93,9 +123,65 @@ def cargar_hospitales(_grafo):
             df[col] = ""
     return df
 
+
+@st.cache_data
+def cargar_bases_samur(_grafo):
+    if SAMUR_BASES_PATH.exists():
+        bases_df = pd.read_csv(SAMUR_BASES_PATH, sep=";")
+        bases_df = bases_df.rename(columns={"latitud": "lat", "longitud": "lon"})
+
+        for col in ["lat", "lon"]:
+            bases_df[col] = pd.to_numeric(bases_df[col], errors="coerce")
+        bases_df = bases_df[bases_df["lat"].notna() & bases_df["lon"].notna()].copy()
+
+        bases = []
+        for _, row in bases_df.iterrows():
+            nombre = str(row.get("nombre", "Base SAMUR")).strip() or "Base SAMUR"
+            bases.append(
+                {
+                    "base_id": str(row.get("base", "")).strip(),
+                    "nombre": nombre,
+                    "calle": str(row.get("calle", "")).strip(),
+                    "distrito": str(row.get("distrito", "")).strip(),
+                    "lat": float(row["lat"]),
+                    "lon": float(row["lon"]),
+                    "nodo_red": int(ox.distance.nearest_nodes(_grafo, X=float(row["lon"]), Y=float(row["lat"]))),
+                }
+            )
+        if bases:
+            return bases
+
+    # Fallback mínimo por compatibilidad si falta el CSV procesado de SAMUR.
+    return [
+        {
+            "base_id": "0",
+            "nombre": "Base Central",
+            "calle": "",
+            "distrito": "",
+            "lat": 40.4117,
+            "lon": -3.7430,
+            "nodo_red": int(ox.distance.nearest_nodes(_grafo, X=-3.7430, Y=40.4117)),
+        }
+    ]
+
 grafo = load_graph_with_traffic()
 df_hospitales = cargar_hospitales(grafo)
+AMBULATORIOS = cargar_bases_samur(grafo)
+
+if df_hospitales.empty:
+    st.error("No se pudieron cargar hospitales con coordenadas válidas.")
+    st.stop()
+
+if not AMBULATORIOS:
+    st.error("No se pudieron cargar bases SAMUR válidas.")
+    st.stop()
+
 lista_nodos = list(grafo.nodes())
+
+RESUMEN_DATOS = {
+    "hospitales": int(df_hospitales["centro_id"].nunique()) if "centro_id" in df_hospitales.columns else int(len(df_hospitales)),
+    "bases_samur": int(len(AMBULATORIOS)),
+}
 
 # --- ZONAS DE TRÁFICO ---
 ZONAS_TRAFICO = [
@@ -106,22 +192,6 @@ ZONAS_TRAFICO = [
     {"lat": 40.4190, "lon": -3.7020, "radio": 1100, "nivel": "Medio"},  
     {"lat": 40.4080, "lon": -3.6750, "radio": 900, "nivel": "Bajo"}     
 ]
-
-# --- BASES DE AMBULANCIAS ---
-AMBULATORIOS = [
-    {"nombre": "C.S. Chamberí", "lat": 40.4338, "lon": -3.7020},
-    {"nombre": "C.S. Pacífico", "lat": 40.4026, "lon": -3.6732},
-    {"nombre": "C.S. Delicias", "lat": 40.3953, "lon": -3.6946},
-    {"nombre": "C.S. Goya", "lat": 40.4245, "lon": -3.6762},
-    {"nombre": "C.S. Salamanca", "lat": 40.4285, "lon": -3.6811},
-    {"nombre": "C.S. San Fermín", "lat": 40.3705, "lon": -3.6925},
-    {"nombre": "C.S. Argüelles", "lat": 40.4281, "lon": -3.7153},
-    {"nombre": "C.S. Moratalaz", "lat": 40.4081, "lon": -3.6521},
-    {"nombre": "C.S. Fuencarral", "lat": 40.4901, "lon": -3.6931},
-    {"nombre": "C.S. Latina", "lat": 40.3855, "lon": -3.7381}
-]
-for amb in AMBULATORIOS:
-    amb['nodo_red'] = int(ox.distance.nearest_nodes(grafo, X=amb['lon'], Y=amb['lat']))
 
 # ==============================================================================
 # 3. PRE-CÁLCULO DEL BUCLE
@@ -134,7 +204,10 @@ if 'simulaciones_generadas' not in st.session_state:
         hosp_datos_sim = []
         for idx, row in df_hospitales.iterrows():
             hosp_datos_sim.append({
-                "nombre": row['nombre'], "lat": row['lat'], "lon": row['lon'],
+                "centro_id": str(row.get('centro_id', idx)),
+                "nombre": str(row.get('nombre', f"Hospital {row.get('centro_id', idx)}")),
+                "centro_tipo": str(row.get('centro_tipo', 'Hospital')),
+                "lat": row['lat'], "lon": row['lon'],
                 "nodo_red": int(row['nodo_red']), 
                 "direccion": str(row.get('direccion_completa', '') or ''),
                 "especialidades": str(row.get('especialidades_texto', '') or ''),
@@ -179,15 +252,15 @@ if 'simulaciones_generadas' not in st.session_state:
             except nx.NetworkXNoPath: 
                 continue
         
-        raw_gps_ida = [[grafo.nodes[n]['y'], grafo.nodes[n]['x']] for n in ruta_ida]
-        raw_gps_vuelta = [[grafo.nodes[n]['y'], grafo.nodes[n]['x']] for n in ruta_vuelta]
+        gps_ida_coords = [[grafo.nodes[n]['y'], grafo.nodes[n]['x']] for n in ruta_ida]
+        gps_vuelta_coords = [[grafo.nodes[n]['y'], grafo.nodes[n]['x']] for n in ruta_vuelta]
         msg_ia = f"<b>Destino Óptimo Definido</b><br>{destino_hosp['nombre']}<br>Elegido por: Tráfico, Ocupación ({destino_hosp['occ']}%) y Espera."
 
         operativos.append({
             "hospitales": hosp_datos_sim,
             "emergencia": coords_em,
-            "gps_ida": raw_gps_ida,
-            "gps_vuelta": raw_gps_vuelta,
+            "gps_ida": gps_ida_coords,
+            "gps_vuelta": gps_vuelta_coords,
             "destino": destino_hosp,
             "mensaje": msg_ia
         })
@@ -205,6 +278,7 @@ pantalla_carga.empty()
 ambu_json = json.dumps(AMBULATORIOS)
 zonas_json = json.dumps(ZONAS_TRAFICO)
 operativos_json = json.dumps(operativos)
+resumen_json = json.dumps(RESUMEN_DATOS)
 
 html_crudo = """
 <!DOCTYPE html>
@@ -247,14 +321,190 @@ html_crudo = """
         /* CSS DE LAS BARRAS DE PROGRESO DE HOSPITALES */
         .progress-bg { background: #e0e0e0; width: 100%; height: 8px; border-radius: 4px; margin-top: 4px; overflow: hidden; }
         .progress-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+
+        #hud {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            z-index: 1200;
+            pointer-events: none;
+        }
+        .hud-card {
+            background: rgba(255, 255, 255, 0.95);
+            border: 1px solid rgba(11, 92, 171, 0.18);
+            border-radius: 10px;
+            padding: 10px 12px;
+            width: 220px;
+            box-shadow: 0 6px 14px rgba(0,0,0,0.18);
+            font-family: Arial, sans-serif;
+            color: #213547;
+        }
+        .hud-title {
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            margin-bottom: 8px;
+            color: #0b5cab;
+            text-transform: uppercase;
+        }
+        .hud-kpi {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 13px;
+            margin-bottom: 6px;
+        }
+        .hud-kpi b {
+            color: #111;
+            font-size: 14px;
+        }
+
+        /* PANEL LATERAL PARA DETALLES DE HOSPITAL */
+        #sidebarPanel {
+            position: fixed;
+            top: 0;
+            right: -380px;
+            width: 360px;
+            height: 100vh;
+            background: white;
+            box-shadow: -2px 0 8px rgba(0,0,0,0.2);
+            z-index: 2000;
+            transition: right 0.3s ease;
+            overflow-y: auto;
+            font-family: Arial, sans-serif;
+        }
+        #sidebarPanel.open {
+            right: 0;
+        }
+        .sidebar-header {
+            background: linear-gradient(135deg, #0b5cab 0%, #2196F3 100%);
+            color: white;
+            padding: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #ddd;
+        }
+        .sidebar-header h2 {
+            margin: 0;
+            font-size: 16px;
+            flex-grow: 1;
+        }
+        .sidebar-close {
+            background: rgba(255,255,255,0.3);
+            border: none;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            padding: 0 8px;
+            border-radius: 4px;
+        }
+        .sidebar-close:hover {
+            background: rgba(255,255,255,0.5);
+        }
+        .sidebar-content {
+            padding: 16px;
+            color: #333;
+        }
+        .info-section {
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .info-section:last-child {
+            border-bottom: none;
+        }
+        .info-label {
+            font-weight: 700;
+            color: #0b5cab;
+            font-size: 12px;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+            letter-spacing: 0.4px;
+        }
+        .info-value {
+            font-size: 14px;
+            color: #333;
+            line-height: 1.5;
+            word-wrap: break-word;
+        }
+        .occupancy-bar {
+            width: 100%;
+            height: 20px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+        .occupancy-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        .specialty-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .specialty-tag {
+            background: #f0f0f0;
+            color: #333;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            border-left: 3px solid #0b5cab;
+        }
+
+        /* TOOLTIP PERSISTENTE */
+        .hosp-tooltip-container {
+            position: relative;
+            z-index: 100;
+        }
+        .hosp-tooltip-content {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+            max-width: 300px;
+            z-index: 1100;
+        }
     </style>
 </head>
 <body>
+    <div id="sidebarPanel">
+        <div class="sidebar-header">
+            <h2>Detalles Hospital</h2>
+            <button class="sidebar-close" onclick="cerrarSidebar()">&times;</button>
+        </div>
+        <div class="sidebar-content" id="sidebarContent"></div>
+    </div>
+    <div id="hud">
+        <div class="hud-card">
+            <div class="hud-title">Centro de Control</div>
+            <div class="hud-kpi"><span>Hospitales</span><b id="kpiHosp">0</b></div>
+            <div class="hud-kpi"><span>Bases SAMUR</span><b id="kpiBases">0</b></div>
+            <div class="hud-kpi"><span>Estado</span><b id="kpiEstado">Inicializando</b></div>
+        </div>
+    </div>
     <div id="map"></div>
     <script>
         // CÁMARA MANUAL: Se centra en Madrid y no se mueve sola nunca más.
         var map = L.map('map', {preferCanvas: true}).setView([40.4168, -3.7038], 13);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png').addTo(map);
+
+        var resumen = __RESUMEN_DATOS__;
+        document.getElementById('kpiHosp').textContent = resumen.hospitales;
+        document.getElementById('kpiBases').textContent = resumen.bases_samur;
 
         // ZONAS DE TRÁFICO
         var zonasTrafico = __ZONAS_TRAFICO__;
@@ -269,7 +519,10 @@ html_crudo = """
         var ambulatorios = __AMBULATORIOS__;
         ambulatorios.forEach(function(a) {
             var icon = L.divIcon({className: 'ambu-marker', html: '🩺', iconSize: [26,26], iconAnchor: [13,13]});
-            L.marker([a.lat, a.lon], {icon: icon}).bindTooltip("<b>Base SVB</b><br>" + a.nombre, {direction: 'top', className: 'custom-tip'}).addTo(map);
+            var tooltipBase = "<b>Base SAMUR</b><br>" + a.nombre;
+            if (a.distrito) tooltipBase += "<br><span style='color:#555'>Distrito: " + a.distrito + "</span>";
+            if (a.calle) tooltipBase += "<br><span style='color:#555'>" + a.calle + "</span>";
+            L.marker([a.lat, a.lon], {icon: icon}).bindTooltip(tooltipBase, {direction: 'top', className: 'custom-tip'}).addTo(map);
         });
 
         var operativos = __OPERATIVOS__;
@@ -300,25 +553,104 @@ html_crudo = """
                 
                 var icon = L.divIcon({className: 'hosp-marker ' + colorClass, html: '🏥', iconSize: [30,30], iconAnchor: [15,15]});
                 
-                if (!hospitalMarkers[h.nombre]) {
-                    hospitalMarkers[h.nombre] = L.marker([h.lat, h.lon]).addTo(map);
+                var markerKey = h.centro_id || h.nombre;
+                if (!hospitalMarkers[markerKey]) {
+                    hospitalMarkers[markerKey] = L.marker([h.lat, h.lon]).addTo(map);
                 }
                 
-                var marker = hospitalMarkers[h.nombre];
+                var marker = hospitalMarkers[markerKey];
                 marker.setIcon(icon);
                 
                 var tipHTML = `
-                    <div style="text-align: left;">
+                    <div style="text-align: left; cursor: pointer;" onclick="abrirSidebarHospital(" + JSON.stringify(h) + ")">
                         <center><b>${h.nombre}</b></center><hr style="margin:4px 0;">
-                        <div style="margin-top: 2px;">📍 <b>Dirección:</b><br><span style="display:block; max-width: 320px; white-space: normal;">${h.direccion || 'No disponible'}</span></div>
-                        <div style="margin-top: 6px;">🩺 <b>Especialidades:</b><br><span style="display:block; max-width: 320px; max-height: 66px; overflow-y: auto; white-space: normal;">${h.especialidades || 'No disponible'}</span></div>
-                        <div style="margin-top: 4px;">🧠 <b>Perfiles:</b> ${h.perfiles || 'No definido'}</div>
-                        🛏️ Ocupación: <b>${h.occ}%</b>
+                        <div style="margin-top: 2px; font-size: 11px;">🏷️ ${h.centro_id || 'N/D'} | ${h.centro_tipo || 'Hospital'}</div>
+                        <div style="margin-top: 4px; font-size: 11px;">🛏️ Ocupación: <b>${h.occ}%</b></div>
                         <div class="progress-bg"><div class="progress-fill" style="width: ${h.occ}%; background-color: ${barColor};"></div></div>
-                        <div style="margin-top: 4px;">⏱️ Espera: <b>${h.wait} min</b></div>
+                        <div style="margin-top: 4px; font-size: 11px; color: #0b5cab; font-weight: bold;">Haz click para más detalles →</div>
                     </div>`;
-                marker.bindTooltip(tipHTML, {direction: 'top', offset: [0, -15], className: 'custom-tip'});
+                
+                var tooltipElement = L.popup({autoClose: false, closeButton: false, className: 'custom-tip'}).setContent(tipHTML);
+                marker.bindPopup(tooltipElement);
+                
+                var tooltipShown = false;
+                marker.on('mouseover', function() {
+                    this.openPopup();
+                    tooltipShown = true;
+                });
+                marker.on('mouseout', function() {
+                    if (!tooltipShown) return;
+                    setTimeout(function() {
+                        if (!marker.getPopup()._container || !marker.getPopup()._container.closest('body')) return;
+                        var popupContainer = marker.getPopup()._container;
+                        if (!popupContainer.matches(':hover')) {
+                            marker.closePopup();
+                            tooltipShown = false;
+                        }
+                    }, 100);
+                });
+                
+                marker.on('click', function() {
+                    abrirSidebarHospital(h);
+                });
             });
+        }
+
+        function abrirSidebarHospital(h) {
+            var especialidadesArray = h.especialidades ? h.especialidades.split(' | ') : [];
+            var perfilesArray = h.perfiles ? h.perfiles.split(' | ') : [];
+            
+            var content = `
+                <div class="info-section">
+                    <div class="info-label">Identificación</div>
+                    <div class="info-value"><strong>${h.nombre}</strong></div>
+                    <div class="info-value" style="font-size: 12px; color: #666;">ID: ${h.centro_id || 'N/D'} | Tipo: ${h.centro_tipo || 'Hospital'}</div>
+                </div>
+
+                <div class="info-section">
+                    <div class="info-label">Ubicación</div>
+                    <div class="info-value">${h.direccion || 'No disponible'}</div>
+                    <div class="info-value" style="font-size: 11px; color: #999; margin-top: 6px;">Lat: ${h.lat.toFixed(4)} | Lon: ${h.lon.toFixed(4)}</div>
+                </div>
+
+                <div class="info-section">
+                    <div class="info-label">Estado Operativo</div>
+                    <div style="margin-bottom: 8px;">
+                        <div class="info-value" style="margin-bottom: 4px;">Ocupación: <strong>${h.occ}%</strong></div>
+                        <div class="occupancy-bar">
+                            <div class="occupancy-fill" style="width: ${h.occ}%; background-color: ${h.occ > 85 ? '#e74c3c' : (h.occ > 50 ? '#f39c12' : '#2ecc71')};">
+                                ${h.occ > 20 ? h.occ + '%' : ''}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="info-value">Espera: <strong>${h.wait} min</strong></div>
+                </div>
+
+                ${especialidadesArray.length > 0 ? `
+                <div class="info-section">
+                    <div class="info-label">Especialidades</div>
+                    <div class="specialty-list">
+                        ${especialidadesArray.map(e => `<span class="specialty-tag">${e.trim()}</span>`).join('')}
+                    </div>
+                </div>
+                ` : ''}
+
+                ${perfilesArray.length > 0 ? `
+                <div class="info-section">
+                    <div class="info-label">Perfiles de Atención</div>
+                    <div class="specialty-list">
+                        ${perfilesArray.map(p => `<span class="specialty-tag" style="border-left-color: #4caf50;">${p.trim()}</span>`).join('')}
+                    </div>
+                </div>
+                ` : ''}
+            `;
+            
+            document.getElementById('sidebarContent').innerHTML = content;
+            document.getElementById('sidebarPanel').classList.add('open');
+        }
+
+        function cerrarSidebar() {
+            document.getElementById('sidebarPanel').classList.remove('open');
         }
 
         function limpiarMapa() {
@@ -332,6 +664,7 @@ html_crudo = """
             if (currentIndex >= operativos.length) currentIndex = 0; 
             
             var op = operativos[currentIndex];
+            document.getElementById('kpiEstado').textContent = 'Emergencia en curso';
             limpiarMapa();
             actualizarHospitales(op.hospitales); 
             
@@ -370,7 +703,8 @@ html_crudo = """
                         map.removeLayer(woundedMarker); 
                         
                         // Resaltar destino (el resto se quedan con su color original, sin apagarse)
-                        var markerTarget = hospitalMarkers[op.destino.nombre];
+                        var markerTargetKey = op.destino.centro_id || op.destino.nombre;
+                        var markerTarget = hospitalMarkers[markerTargetKey];
                         if(markerTarget) {
                             markerTarget.setIcon(L.divIcon({className: 'hosp-marker hosp-target', html: '🏥🏁', iconSize: [36,36], iconAnchor: [18,18]}));
                             // Usamos bindTooltip en lugar de openPopup para que solo se vea al pasar el ratón
@@ -395,6 +729,7 @@ html_crudo = """
                     frameIndex++;
                     setTimeout(animarVuelta, velocidadVuelta); 
                 } else {
+                    document.getElementById('kpiEstado').textContent = 'Paciente entregado';
                     markerAmb.bindPopup("<h3 style='color:green; margin:0;'>✅ Llegada a Destino</h3>Paciente entregado.").openPopup();
                     
                     // ESPERAR 5 SEGUNDOS Y LANZAR LA SIGUIENTE EMERGENCIA
@@ -424,7 +759,8 @@ html_crudo = """
 
 html_mapa = html_crudo.replace("__ZONAS_TRAFICO__", zonas_json)\
                       .replace("__AMBULATORIOS__", ambu_json)\
-                      .replace("__OPERATIVOS__", operativos_json)
+                      .replace("__OPERATIVOS__", operativos_json)\
+                      .replace("__RESUMEN_DATOS__", resumen_json)
 
 components.html(html_mapa, height=1000)
 
