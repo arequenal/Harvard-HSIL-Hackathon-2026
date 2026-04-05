@@ -4,7 +4,13 @@ import networkx as nx
 import pandas as pd
 import random
 import json
+from pathlib import Path
 import streamlit.components.v1 as components
+
+BASE_DIR = Path(__file__).resolve().parent
+GRAPH_PATH = BASE_DIR / "madrid_grafo.graphml"
+HOSPITALES_PATH = BASE_DIR / "hospitales_madrid_nodos.csv"
+PROCESSED_HOSPITALES_PATH = BASE_DIR.parent / "analisis_datos" / "data" / "processed" / "centros_servicios_establecimientos_sanitarios_limpio.csv"
 
 # ==============================================================================
 # 1. CONFIGURACIÓN DE LA PÁGINA (Pantalla completa real)
@@ -50,7 +56,7 @@ pantalla_carga.markdown("""
 # ==============================================================================
 @st.cache_resource
 def load_graph_with_traffic():
-    G = ox.load_graphml("madrid_grafo.graphml")
+    G = ox.load_graphml(GRAPH_PATH)
     for u, v, key, data in G.edges(keys=True, data=True):
         traffic_factor = random.uniform(1.0, 3.0)
         data['traffic_factor'] = traffic_factor
@@ -58,11 +64,37 @@ def load_graph_with_traffic():
     return G
 
 @st.cache_data
-def cargar_hospitales():
-    return pd.read_csv("hospitales_madrid_nodos.csv")
+def cargar_hospitales(_grafo):
+    if PROCESSED_HOSPITALES_PATH.exists():
+        df = pd.read_csv(PROCESSED_HOSPITALES_PATH, sep=";")
+        # Keep only Madrid centers for consistency with the Madrid road graph.
+        if "municipio" in df.columns:
+            df = df[df["municipio"].astype(str).str.lower() == "madrid"].copy()
+
+        # Adapt processed schema to app schema.
+        if "nombre" not in df.columns:
+            df["nombre"] = df["centro_id"].astype(str)
+
+        for col in ["lat", "lon"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df = df[df["lat"].notna() & df["lon"].notna()].copy()
+
+        df["nodo_red"] = df.apply(
+            lambda row: int(ox.distance.nearest_nodes(_grafo, X=float(row["lon"]), Y=float(row["lat"]))),
+            axis=1,
+        )
+    else:
+        # Backward-compatible fallback.
+        df = pd.read_csv(HOSPITALES_PATH)
+
+    # Ensure optional enrichment columns always exist for tooltip rendering.
+    for col in ["direccion_completa", "especialidades_texto", "perfiles_atencion"]:
+        if col not in df.columns:
+            df[col] = ""
+    return df
 
 grafo = load_graph_with_traffic()
-df_hospitales = cargar_hospitales()
+df_hospitales = cargar_hospitales(grafo)
 lista_nodos = list(grafo.nodes())
 
 # --- ZONAS DE TRÁFICO ---
@@ -104,6 +136,9 @@ if 'simulaciones_generadas' not in st.session_state:
             hosp_datos_sim.append({
                 "nombre": row['nombre'], "lat": row['lat'], "lon": row['lon'],
                 "nodo_red": int(row['nodo_red']), 
+                "direccion": str(row.get('direccion_completa', '') or ''),
+                "especialidades": str(row.get('especialidades_texto', '') or ''),
+                "perfiles": str(row.get('perfiles_atencion', '') or ''),
                 "occ": random.randint(30, 98), "wait": random.randint(10, 120)
             })
 
@@ -275,6 +310,9 @@ html_crudo = """
                 var tipHTML = `
                     <div style="text-align: left;">
                         <center><b>${h.nombre}</b></center><hr style="margin:4px 0;">
+                        <div style="margin-top: 2px;">📍 <b>Dirección:</b><br><span style="display:block; max-width: 320px; white-space: normal;">${h.direccion || 'No disponible'}</span></div>
+                        <div style="margin-top: 6px;">🩺 <b>Especialidades:</b><br><span style="display:block; max-width: 320px; max-height: 66px; overflow-y: auto; white-space: normal;">${h.especialidades || 'No disponible'}</span></div>
+                        <div style="margin-top: 4px;">🧠 <b>Perfiles:</b> ${h.perfiles || 'No definido'}</div>
                         🛏️ Ocupación: <b>${h.occ}%</b>
                         <div class="progress-bg"><div class="progress-fill" style="width: ${h.occ}%; background-color: ${barColor};"></div></div>
                         <div style="margin-top: 4px;">⏱️ Espera: <b>${h.wait} min</b></div>
