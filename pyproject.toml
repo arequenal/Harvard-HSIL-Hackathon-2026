@@ -1,0 +1,10 @@
+[project]
+name = "hackathon-hsil-2026"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "osmnx>=2.1.0",
+    "streamlit>=1.56.0",
+]
