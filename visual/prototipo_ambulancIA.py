@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import osmnx as ox
 import networkx as nx
@@ -6,6 +7,8 @@ import random
 import json
 from pathlib import Path
 import streamlit.components.v1 as components
+
+from clinical_llm import analyze_clinical_diagnosis
 
 BASE_DIR = Path(__file__).resolve().parent
 GRAPH_PATH = BASE_DIR / "madrid_grafo.graphml"
@@ -182,6 +185,56 @@ RESUMEN_DATOS = {
     "hospitales": int(df_hospitales["centro_id"].nunique()) if "centro_id" in df_hospitales.columns else int(len(df_hospitales)),
     "bases_samur": int(len(AMBULATORIOS)),
 }
+
+# ============================================================================== 
+# 3B. EXTRACTOR DE DIAGNÓSTICO A JSON / VECTOR
+# ============================================================================== 
+st.markdown("### Extractor de diagnóstico clínico")
+st.caption("Pega una nota clínica en texto libre y el modelo la transforma en JSON estructurado o vector de características.")
+
+with st.form("diagnostico_clinico_form"):
+    diagnostico_texto = st.text_area(
+        "Diagnóstico / nota clínica",
+        placeholder="Ejemplo: Paciente de 68 años con dolor torácico súbito, disnea y saturación del 88%. Antecedentes de hipertensión.",
+        height=180,
+    )
+    col_modelo, col_salida = st.columns([2, 1])
+    with col_modelo:
+        modelo_llm = st.text_input(
+            "Modelo LLM",
+            value=os.getenv("AMBULANCIA_LLM_MODEL", "llama3.1:8b-instruct"),
+            help="Se usa Ollama por defecto. Si no está disponible, el sistema aplica un fallback local.",
+        )
+    with col_salida:
+        modo_salida = st.radio("Vista", ["Ambas", "JSON", "Vector"], horizontal=False, index=0)
+    ejecutar_analisis = st.form_submit_button("Analizar diagnóstico")
+
+if ejecutar_analisis:
+    if diagnostico_texto.strip():
+        with st.spinner("Extrayendo información clínica..."):
+            st.session_state["diagnostico_llm_resultado"] = analyze_clinical_diagnosis(diagnostico_texto, model=modelo_llm)
+            st.session_state["diagnostico_llm_modo"] = modo_salida
+    else:
+        st.warning("Escribe un diagnóstico o una nota clínica antes de analizarla.")
+
+if "diagnostico_llm_resultado" in st.session_state:
+    resultado_llm = st.session_state["diagnostico_llm_resultado"]
+    modo_activo = st.session_state.get("diagnostico_llm_modo", "Ambas")
+
+    estado_fuente = "fallback local" if resultado_llm["fallback_used"] else f"{resultado_llm['provider']} / {resultado_llm['model']}"
+    st.info(f"Salida generada con {estado_fuente}.")
+
+    if modo_activo in {"Ambas", "JSON"}:
+        st.subheader("JSON estructurado")
+        st.json(resultado_llm["structured_output"])
+
+    if modo_activo in {"Ambas", "Vector"}:
+        st.subheader("Vector de características")
+        st.dataframe(pd.DataFrame([resultado_llm["feature_map"]]), use_container_width=True)
+        st.code(json.dumps(resultado_llm["feature_vector"], ensure_ascii=False, indent=2), language="json")
+
+    with st.expander("Ver salida cruda del modelo", expanded=False):
+        st.code(resultado_llm["raw_model_output"], language="json")
 
 # --- ZONAS DE TRÁFICO ---
 ZONAS_TRAFICO = [
