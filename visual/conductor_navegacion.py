@@ -19,22 +19,182 @@ GRAPH_PATH = BASE_DIR / "madrid_grafo.graphml"
 HOSPITALES_PATH = BASE_DIR / "hospitales_madrid_nodos.csv"
 PROCESSED_HOSPITALES_PATH = BASE_DIR.parent / "analisis_datos" / "data" / "processed" / "centros_servicios_establecimientos_sanitarios_limpio.csv"
 
-st.set_page_config(page_title="IA Ambulancias Smart City", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="AmbulancIA Conductor", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Barlow:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap');
+        :root {
+            --ink: #10263f;
+            --muted: #5f7287;
+            --brand: #0a6fb8;
+            --brand-2: #0fb38b;
+            --card: rgba(255,255,255,0.92);
+            --line: rgba(14, 48, 78, 0.12);
+            --shadow: 0 16px 40px rgba(8, 30, 52, 0.14);
+        }
+        html, body {
+            background:
+                radial-gradient(circle at 15% 10%, rgba(15, 179, 139, 0.12), transparent 28%),
+                radial-gradient(circle at 85% 16%, rgba(10, 111, 184, 0.14), transparent 30%),
+                linear-gradient(180deg, #f4f8fc 0%, #eef4f9 100%);
+            transition: opacity 180ms ease, filter 180ms ease;
+        }
+        body.conductor-soft-sync {
+            opacity: 0.92;
+            filter: saturate(0.96);
+        }
         #MainMenu {visibility: hidden;}
         header {visibility: hidden;}
         footer {visibility: hidden;}
         .block-container {
-            padding-top: 0rem !important;
-            padding-bottom: 0rem !important;
-            padding-left: 0rem !important;
-            padding-right: 0rem !important;
+            padding-top: 0.6rem !important;
+            padding-bottom: 0.5rem !important;
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
             max-width: 100% !important;
+        }
+        .hero-shell {
+            border-radius: 22px;
+            padding: 18px 20px;
+            margin: 0 0 14px 0;
+            background: linear-gradient(135deg, rgba(8, 89, 142, 0.98), rgba(10, 111, 184, 0.92) 50%, rgba(15, 179, 139, 0.92));
+            color: white;
+            box-shadow: 0 16px 34px rgba(8, 64, 102, 0.24);
+        }
+        .hero-shell h1 {
+            margin: 0;
+            font-family: 'Barlow', sans-serif;
+            font-size: 1.85rem;
+            letter-spacing: 0.2px;
+        }
+        .hero-shell p {
+            margin: 6px 0 0;
+            opacity: 0.94;
+            font-family: 'Inter', sans-serif;
+        }
+        .status-card {
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            padding: 12px 14px;
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(8px);
+            min-height: 84px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            border-top: 3px solid rgba(10, 111, 184, 0.35);
+        }
+        .status-label {
+            display: block;
+            color: var(--muted);
+            font-size: 0.79rem;
+            margin-bottom: 4px;
+        }
+        .status-value {
+            display: block;
+            color: var(--ink);
+            font-size: 1rem;
+            font-weight: 700;
+            font-family: 'Inter', sans-serif;
+            line-height: 1.2;
+            word-break: break-word;
+        }
+        .state-strip {
+            margin-top: 12px;
+            padding: 14px;
+            border-radius: 20px;
+            background: rgba(255,255,255,0.72);
+            border: 1px solid rgba(8, 64, 102, 0.10);
+            box-shadow: 0 12px 28px rgba(8, 30, 52, 0.08);
+        }
+        .state-strip, .map-wrap {
+            transition: opacity 180ms ease, transform 180ms ease;
+        }
+        .state-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 12px;
+            color: var(--muted);
+            font-size: 0.88rem;
+        }
+        .state-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 10px;
+            border-radius: 999px;
+            background: rgba(10, 111, 184, 0.08);
+            color: #114a77;
+            border: 1px solid rgba(10, 111, 184, 0.16);
+        }
+        .control-strip {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+        .control-strip button {
+            border-radius: 999px !important;
+            border: 1px solid rgba(10, 111, 184, 0.16) !important;
+            padding: 0.42rem 0.95rem !important;
+            min-height: 2.4rem !important;
+            box-shadow: 0 8px 18px rgba(8, 30, 52, 0.08);
+        }
+        .alert-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 10px;
+            border-radius: 999px;
+            background: rgba(8, 184, 153, 0.10);
+            border: 1px solid rgba(8, 184, 153, 0.18);
+            color: #165244;
+            font-size: 0.84rem;
+            margin: 4px 6px 0 0;
+        }
+        .alert-chip--none {
+            background: rgba(95, 114, 135, 0.08);
+            border-color: rgba(95, 114, 135, 0.14);
+            color: var(--muted);
+        }
+        .panel-title {
+            font-family: 'Barlow', sans-serif;
+            font-size: 1.03rem;
+            font-weight: 700;
+            color: #153a59;
+            margin: 6px 0 10px;
+        }
+        .status-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.16);
+            border: 1px solid rgba(255,255,255,0.24);
+            color: white;
+            font-weight: 600;
+            font-size: 0.84rem;
+            margin-right: 8px;
+            margin-top: 10px;
+        }
+        .map-wrap {
+            margin-top: 14px;
+            padding: 14px;
+            background: rgba(255,255,255,0.78);
+            border: 1px solid rgba(8, 64, 102, 0.12);
+            border-radius: 22px;
+            box-shadow: var(--shadow);
         }
         iframe {
             height: 100vh !important;
+            border-radius: 18px;
+        }
+        .streamlit-expanderHeader {
+            font-family: 'Inter', sans-serif;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -171,23 +331,72 @@ def startup_reset_once() -> bool:
 
 def render_state_debug(state: dict[str, object], destination_id: str, destination_name: str, traffic_alerts: list[str]) -> None:
     with st.container():
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Estado compartido", str(state.get("version", 0)))
-        col2.metric("Ultima actualización", str(state.get("updated_at", "-"))[:19].replace("T", " "))
-        col3.metric("Destino recibido", destination_id or "-")
-        col4.metric("Nombre recibido", destination_name or "-")
-
-        st.caption("Si estos campos cambian al publicar desde el operador, el conductor sí está recibiendo el estado compartido.")
-        if traffic_alerts:
-            st.info("Alertas recibidas: " + " | ".join(traffic_alerts))
-        else:
-            st.info("Alertas recibidas: ninguna")
-
-        left, right = st.columns([3, 1])
-        with right:
-            if st.button("Reset operativo", type="secondary", use_container_width=True):
+        st.markdown(
+            """
+            <div class="hero-shell">
+                <h1>Conductor Smart City</h1>
+                <p>Ruta operativa en tiempo real, con sincronización desde operador y visualización de tráfico urbano.</p>
+                <span class="status-chip">Sincronización activa</span>
+                <span class="status-chip">Ruta por red vial</span>
+                <span class="status-chip">Panel operativo</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="control-strip">', unsafe_allow_html=True)
+        a, b, c = st.columns([1, 1, 3], gap="small")
+        with a:
+            if st.button("Sincronizar", type="primary", use_container_width=True):
+                st.rerun()
+        with b:
+            if st.button("Reset", type="secondary", use_container_width=True):
                 reset_operativo()
                 st.rerun()
+        with c:
+            st.markdown(
+                '<div style="padding:0.55rem 0.2rem;color:#5f7287;font-size:0.9rem;">'
+                'La barra superior resume el estado actual y la información se refresca al sincronizar desde el operador.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="state-strip">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title">Estado compartido</div>', unsafe_allow_html=True)
+        c1, c2, c3, c4 = st.columns(4, gap="small")
+        with c1:
+            st.markdown(
+                f'<div class="status-card"><span class="status-label">Versión</span><span class="status-value">{state.get("version", 0)}</span></div>',
+                unsafe_allow_html=True,
+            )
+        with c2:
+            st.markdown(
+                f'<div class="status-card"><span class="status-label">Actualización</span><span class="status-value">{str(state.get("updated_at", "-"))[:19].replace("T", " ")}</span></div>',
+                unsafe_allow_html=True,
+            )
+        with c3:
+            st.markdown(
+                f'<div class="status-card"><span class="status-label">Destino</span><span class="status-value">{destination_id or "-"}</span></div>',
+                unsafe_allow_html=True,
+            )
+        with c4:
+            st.markdown(
+                f'<div class="status-card"><span class="status-label">Nombre</span><span class="status-value">{destination_name or "-"}</span></div>',
+                unsafe_allow_html=True,
+            )
+
+        st.markdown('<div class="state-meta">', unsafe_allow_html=True)
+        st.markdown('<span class="state-pill">Sincronización activa</span>', unsafe_allow_html=True)
+        st.markdown('<span class="state-pill">Ruta por red vial</span>', unsafe_allow_html=True)
+        if traffic_alerts:
+            st.markdown(
+                '<span class="alert-chip">Alertas: ' + ' · '.join(traffic_alerts) + '</span>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown('<span class="alert-chip alert-chip--none">Alertas: ninguna</span>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
         with st.expander("Ver estado compartido completo"):
             st.json(state)
@@ -263,13 +472,13 @@ if has_destination:
     if route_nodes:
         route_to_hospital = _route_coords(route_nodes)
     else:
-        route_status = "No existe una ruta conectada entre SOS y hospital. Se muestra una traza directa de respaldo para el segundo tramo."
+        route_status = "No existe una ruta conectada entre SOS y hospital. Se muestra una traza directa para el segundo tramo."
         route_to_hospital = []
 
     if len(route_to_hospital) < 2:
         route_to_hospital = [[float(active_sos['lat']), float(active_sos['lon'])], [float(selected_hospital['lat']), float(selected_hospital['lon'])]]
         if route_status == "Ruta en dos tramos: base → SOS y SOS → hospital indicado por operador.":
-            route_status = "El tramo SOS → hospital se dibuja en modo directo de respaldo."
+            route_status = "El tramo SOS → hospital se dibuja en modo directo."
     else:
         final_hospital_point = [float(selected_hospital['lat']), float(selected_hospital['lon'])]
         if route_to_hospital[-1] != final_hospital_point:
@@ -393,6 +602,16 @@ html_crudo = """
 
         // Restore parent page scroll after auto-refresh to avoid visual jump.
         try {
+            const softSyncUntil = Number(window.parent.sessionStorage.getItem('conductorSyncUntil') || '0');
+            if (softSyncUntil && Date.now() < softSyncUntil) {
+                window.parent.document.body.classList.add('conductor-soft-sync');
+                window.setTimeout(() => {
+                    try {
+                        window.parent.document.body.classList.remove('conductor-soft-sync');
+                    } catch (e) {}
+                }, Math.max(0, softSyncUntil - Date.now()) + 220);
+                window.parent.sessionStorage.removeItem('conductorSyncUntil');
+            }
             const savedY = window.parent.sessionStorage.getItem('conductorScrollY');
             if (savedY !== null) {
                 window.parent.scrollTo(0, parseInt(savedY, 10));
@@ -534,6 +753,33 @@ html_crudo = """
                 const etaSos = Math.max(1, Math.round((gpsSos.length || 2) / 10));
                 const etaHosp = Math.max(1, Math.round((gpsHosp.length || 2) / 10));
 
+                function triggerParentSync() {
+                    try {
+                        window.parent.sessionStorage.setItem('conductorScrollY', String(window.parent.scrollY || 0));
+                        window.parent.sessionStorage.setItem('conductorSyncUntil', String(Date.now() + 600));
+                        window.parent.document.body.classList.add('conductor-soft-sync');
+                        window.setTimeout(() => {
+                            try {
+                                window.parent.document.body.classList.remove('conductor-soft-sync');
+                            } catch (e) {}
+                        }, 750);
+                    } catch (e) {}
+
+                    try {
+                        const btns = Array.from(window.parent.document.querySelectorAll('button'));
+                        const syncBtn = btns.find((b) => (b.innerText || '').trim().includes('Sincronizar'));
+                        if (syncBtn) {
+                            syncBtn.click();
+                            return;
+                        }
+                    } catch (e) {}
+
+                    // Reload only if we cannot trigger a soft Streamlit rerun.
+                    try {
+                        window.parent.location.reload();
+                    } catch (e) {}
+                }
+
                 setTimeout(() => {
                     animarRuta(sosSuave, etaSos, () => {
                         markerAmb.setLatLng([op.sos.lat, op.sos.lon]);
@@ -543,10 +789,7 @@ html_crudo = """
                             document.getElementById('kEta').textContent = '--';
                             if (op.auto_refresh_waiting) {
                                 setTimeout(() => {
-                                    try {
-                                        window.parent.sessionStorage.setItem('conductorScrollY', String(window.parent.scrollY || 0));
-                                    } catch (e) {}
-                                    window.parent.location.reload();
+                                    triggerParentSync();
                                 }, 1500);
                             }
                             return;
@@ -569,4 +812,6 @@ html_mapa = html_crudo.replace("__AMBULATORIOS__", ambu_json)\
                       .replace("__OPERATIVOS__", operativos_json)\
                       .replace("__ALERTS__", alerts_json)
 
+st.markdown('<div class="map-wrap">', unsafe_allow_html=True)
 components.html(html_mapa, height=1000)
+st.markdown('</div>', unsafe_allow_html=True)
