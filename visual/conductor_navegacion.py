@@ -1,333 +1,572 @@
-from __future__ import annotations
-
+import streamlit as st
+import osmnx as ox
+import networkx as nx
+import pandas as pd
+import random
 import json
-import math
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
-
-import networkx as nx
-import osmnx as ox
-import pandas as pd
-import streamlit as st
 import streamlit.components.v1 as components
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from visual.dispatch_shared import load_state
+from visual.dispatch_shared import default_state, load_state, save_state
 
-GRAPH_PATH = Path(__file__).resolve().parent / "madrid_grafo.graphml"
-HOSPITALES_PATH = (
-    PROJECT_ROOT / "analisis_datos" / "data" / "processed" / "centros_servicios_establecimientos_sanitarios_limpio.csv"
-)
-BASES_PATH = PROJECT_ROOT / "analisis_datos" / "data" / "processed" / "bases_samur_madrid.csv"
+BASE_DIR = Path(__file__).resolve().parent
+GRAPH_PATH = BASE_DIR / "madrid_grafo.graphml"
+HOSPITALES_PATH = BASE_DIR / "hospitales_madrid_nodos.csv"
+PROCESSED_HOSPITALES_PATH = BASE_DIR.parent / "analisis_datos" / "data" / "processed" / "centros_servicios_establecimientos_sanitarios_limpio.csv"
 
+st.set_page_config(page_title="IA Ambulancias Smart City", layout="wide", initial_sidebar_state="collapsed")
 
-st.set_page_config(page_title="AmbulancIA - Conductor Navegacion", layout="wide")
+st.markdown("""
+    <style>
+        #MainMenu {visibility: hidden;}
+        header {visibility: hidden;}
+        footer {visibility: hidden;}
+        .block-container {
+            padding-top: 0rem !important;
+            padding-bottom: 0rem !important;
+            padding-left: 0rem !important;
+            padding-right: 0rem !important;
+            max-width: 100% !important;
+        }
+        iframe {
+            height: 100vh !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
 
 @st.cache_resource
-def load_graph() -> nx.MultiDiGraph:
-    graph = ox.load_graphml(GRAPH_PATH)
-    return graph
+def load_graph_with_traffic():
+    G = ox.load_graphml(GRAPH_PATH)
+    for u, v, key, data in G.edges(keys=True, data=True):
+        traffic_factor = random.uniform(1.0, 3.0)
+        data['traffic_factor'] = traffic_factor
+        data['weighted_length'] = data.get('length', 1.0) * traffic_factor
+    return G
 
 
 @st.cache_data
-def load_hospitals(_graph: nx.MultiDiGraph) -> pd.DataFrame:
-    df = pd.read_csv(HOSPITALES_PATH, sep=";")
-    for col in ["lat", "lon"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    df = df[df["lat"].notna() & df["lon"].notna()].copy()
-    if "nombre" not in df.columns:
-        df["nombre"] = df["centro_id"].astype(str)
+def cargar_hospitales(_grafo):
+    if PROCESSED_HOSPITALES_PATH.exists():
+        df = pd.read_csv(PROCESSED_HOSPITALES_PATH, sep=";")
 
-    df["nodo_red"] = df.apply(
-        lambda row: int(ox.distance.nearest_nodes(_graph, X=float(row["lon"]), Y=float(row["lat"]))),
-        axis=1,
-    )
+        if "nombre" not in df.columns:
+            df["nombre"] = df["centro_id"].astype(str)
+
+        for col in ["lat", "lon"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df = df[df["lat"].notna() & df["lon"].notna()].copy()
+
+        df["nodo_red"] = df.apply(
+            lambda row: int(ox.distance.nearest_nodes(_grafo, X=float(row["lon"]), Y=float(row["lat"]))),
+            axis=1,
+        )
+    else:
+        df = pd.read_csv(HOSPITALES_PATH)
+
+    for col in ["direccion_completa", "especialidades_texto", "perfiles_atencion"]:
+        if col not in df.columns:
+            df[col] = ""
     return df
 
 
-@st.cache_data
-def load_bases(_graph: nx.MultiDiGraph) -> pd.DataFrame:
-    if not BASES_PATH.exists():
-        base = pd.DataFrame(
-            [
-                {
-                    "nombre": "Base Central",
-                    "lat": 40.4117,
-                    "lon": -3.7430,
-                }
-            ]
-        )
-    else:
-        base = pd.read_csv(BASES_PATH, sep=";")
-        base = base.rename(columns={"latitud": "lat", "longitud": "lon"})
-        for col in ["lat", "lon"]:
-            base[col] = pd.to_numeric(base[col], errors="coerce")
-        base = base[base["lat"].notna() & base["lon"].notna()].copy()
+grafo = load_graph_with_traffic()
+df_hospitales = cargar_hospitales(grafo)
+lista_nodos = list(grafo.nodes())
 
-    base["nodo_red"] = base.apply(
-        lambda row: int(ox.distance.nearest_nodes(_graph, X=float(row["lon"]), Y=float(row["lat"]))),
-        axis=1,
-    )
-    return base
+ZONAS_TRAFICO = [
+    {"lat": 40.4215, "lon": -3.6590, "radio": 1500, "nivel": "Alto"},
+    {"lat": 40.3920, "lon": -3.6850, "radio": 1600, "nivel": "Alto"},
+    {"lat": 40.4490, "lon": -3.6450, "radio": 1300, "nivel": "Alto"},
+    {"lat": 40.4650, "lon": -3.6880, "radio": 1400, "nivel": "Medio"},
+    {"lat": 40.4190, "lon": -3.7020, "radio": 1100, "nivel": "Medio"},
+    {"lat": 40.4080, "lon": -3.6750, "radio": 900, "nivel": "Bajo"}
+]
 
+AMBULATORIOS = [
+    {"nombre": "C.S. Chamberí", "lat": 40.4338, "lon": -3.7020},
+    {"nombre": "C.S. Pacífico", "lat": 40.4026, "lon": -3.6732},
+    {"nombre": "C.S. Delicias", "lat": 40.3953, "lon": -3.6946},
+    {"nombre": "C.S. Goya", "lat": 40.4245, "lon": -3.6762},
+    {"nombre": "C.S. Salamanca", "lat": 40.4285, "lon": -3.6811},
+    {"nombre": "C.S. San Fermín", "lat": 40.3705, "lon": -3.6925},
+    {"nombre": "C.S. Argüelles", "lat": 40.4281, "lon": -3.7153},
+    {"nombre": "C.S. Moratalaz", "lat": 40.4081, "lon": -3.6521},
+    {"nombre": "C.S. Fuencarral", "lat": 40.4901, "lon": -3.6931},
+    {"nombre": "C.S. Latina", "lat": 40.3855, "lon": -3.7381}
+]
+for amb in AMBULATORIOS:
+    amb['nodo_red'] = int(ox.distance.nearest_nodes(grafo, X=amb['lon'], Y=amb['lat']))
 
-def bearing_deg(a: Tuple[float, float], b: Tuple[float, float]) -> float:
-    lat1, lon1 = math.radians(a[0]), math.radians(a[1])
-    lat2, lon2 = math.radians(b[0]), math.radians(b[1])
-    dlon = lon2 - lon1
-    x = math.sin(dlon) * math.cos(lat2)
-    y = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
-    angle = math.degrees(math.atan2(x, y))
-    return (angle + 360.0) % 360.0
-
-
-def normalize_delta(delta: float) -> float:
-    d = (delta + 180.0) % 360.0 - 180.0
-    return d
+SOS_POINTS = [
+    {"nombre": "SOS Gran Via", "lat": 40.4202, "lon": -3.7058},
+    {"nombre": "SOS Retiro", "lat": 40.4166, "lon": -3.6844},
+    {"nombre": "SOS Ventas", "lat": 40.4312, "lon": -3.6637},
+    {"nombre": "SOS Cuatro Caminos", "lat": 40.4473, "lon": -3.7033},
+    {"nombre": "SOS Legazpi", "lat": 40.3918, "lon": -3.6941},
+]
 
 
-def build_turn_message(prev_b: float, next_b: float, dist_m: float) -> str:
-    delta = normalize_delta(next_b - prev_b)
-    if delta > 30:
-        action = "Gira a la derecha"
-    elif delta < -30:
-        action = "Gira a la izquierda"
-    else:
-        action = "Sigue recto"
-
-    if dist_m >= 1000:
-        dist_txt = f"en {dist_m / 1000:.1f} km"
-    else:
-        dist_txt = f"en {int(dist_m)} m"
-
-    return f"{action} {dist_txt}"
+def get_active_sos() -> dict:
+    if "active_sos" not in st.session_state:
+        st.session_state["active_sos"] = random.choice(SOS_POINTS).copy()
+    sos = dict(st.session_state["active_sos"])
+    sos["nodo_red"] = int(ox.distance.nearest_nodes(grafo, X=float(sos["lon"]), Y=float(sos["lat"])))
+    return sos
 
 
-def route_length_m(graph: nx.MultiDiGraph, route: List[int]) -> float:
-    total = 0.0
-    for i in range(len(route) - 1):
-        edge_data = graph.get_edge_data(route[i], route[i + 1])
-        if not edge_data:
+def _best_base_to_target(target_node: int):
+    best = AMBULATORIOS[0]
+    best_cost = float('inf')
+    for amb in AMBULATORIOS:
+        try:
+            cost = nx.shortest_path_length(grafo, source=amb['nodo_red'], target=target_node, weight='weighted_length')
+        except nx.NetworkXNoPath:
             continue
-        best = min(edge_data.values(), key=lambda d: float(d.get("length", 1.0)))
-        total += float(best.get("length", 1.0))
-    return total
+        if cost < best_cost:
+            best_cost = cost
+            best = amb
+    return best
 
 
-def build_route_and_instructions(
-    graph: nx.MultiDiGraph,
-    bases_df: pd.DataFrame,
-    destination_row: pd.Series,
-) -> Dict[str, Any]:
-    base_row = bases_df.iloc[0]
-    try:
-        route_nodes = nx.shortest_path(
-            graph,
-            source=int(base_row["nodo_red"]),
-            target=int(destination_row["nodo_red"]),
-            weight="length",
-        )
-    except nx.NetworkXNoPath:
-        return {
-            "coords": [[float(base_row["lat"]), float(base_row["lon"])], [float(destination_row["lat"]), float(destination_row["lon"])]],
-            "length_m": 6000.0,
-            "instructions": [{"idx": 0, "text": "Inicia ruta hacia el hospital"}],
-            "origin": {"lat": float(base_row["lat"]), "lon": float(base_row["lon"]), "nombre": str(base_row.get("nombre", "Base SAMUR"))},
-        }
+def reset_operativo() -> None:
+    save_state(default_state())
+    st.session_state.pop("active_sos", None)
+    st.cache_data.clear()
+    st.cache_resource.clear()
 
-    coords = [[float(graph.nodes[n]["y"]), float(graph.nodes[n]["x"])] for n in route_nodes]
-    length_m = route_length_m(graph, route_nodes)
+def _route_nodes(source_node: int, target_node: int):
+    route_graphs = [
+        (grafo, 'weighted_length'),
+        (grafo, 'length'),
+        (grafo.to_undirected(), 'weighted_length'),
+        (grafo.to_undirected(), 'length'),
+    ]
+    for route_graph, weight in route_graphs:
+        try:
+            return nx.shortest_path(route_graph, source=source_node, target=target_node, weight=weight)
+        except nx.NetworkXNoPath:
+            continue
+    return None
 
-    instructions: List[Dict[str, Any]] = [{"idx": 0, "text": "Inicia ruta"}]
-    if len(coords) >= 3:
-        step = max(4, len(coords) // 10)
-        for idx in range(step, len(coords) - 1, step):
-            prev_pt = (coords[idx - 1][0], coords[idx - 1][1])
-            curr_pt = (coords[idx][0], coords[idx][1])
-            next_pt = (coords[min(idx + 1, len(coords) - 1)][0], coords[min(idx + 1, len(coords) - 1)][1])
 
-            b1 = bearing_deg(prev_pt, curr_pt)
-            b2 = bearing_deg(curr_pt, next_pt)
-            remaining_ratio = max(0.0, 1.0 - (idx / max(1, len(coords) - 1)))
-            remaining_m = length_m * remaining_ratio
-            instructions.append({"idx": idx, "text": build_turn_message(b1, b2, remaining_m)})
+def _route_coords(route_nodes):
+    coords = []
+    for node in route_nodes:
+        coords.append([float(grafo.nodes[node]['y']), float(grafo.nodes[node]['x'])])
+    return coords
 
-    instructions.append({"idx": max(0, len(coords) - 2), "text": "Mantente en el carril: llegada inminente"})
 
-    return {
-        "coords": coords,
-        "length_m": length_m,
-        "instructions": instructions,
-        "origin": {
-            "lat": float(base_row["lat"]),
-            "lon": float(base_row["lon"]),
-            "nombre": str(base_row.get("nombre", "Base SAMUR")),
-        },
+@st.cache_resource
+def startup_reset_once() -> bool:
+    # Reset shared operator-conductor state once per conductor app startup.
+    save_state(default_state())
+    return True
+
+
+def render_state_debug(state: dict[str, object], destination_id: str, destination_name: str, traffic_alerts: list[str]) -> None:
+    with st.container():
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Estado compartido", str(state.get("version", 0)))
+        col2.metric("Ultima actualización", str(state.get("updated_at", "-"))[:19].replace("T", " "))
+        col3.metric("Destino recibido", destination_id or "-")
+        col4.metric("Nombre recibido", destination_name or "-")
+
+        st.caption("Si estos campos cambian al publicar desde el operador, el conductor sí está recibiendo el estado compartido.")
+        if traffic_alerts:
+            st.info("Alertas recibidas: " + " | ".join(traffic_alerts))
+        else:
+            st.info("Alertas recibidas: ninguna")
+
+        left, right = st.columns([3, 1])
+        with right:
+            if st.button("Reset operativo", type="secondary", use_container_width=True):
+                reset_operativo()
+                st.rerun()
+
+        with st.expander("Ver estado compartido completo"):
+            st.json(state)
+
+
+# Reset automatico al iniciar el conductor (una vez por arranque del proceso).
+startup_reset_once()
+if "startup_session_init" not in st.session_state:
+    st.session_state.pop("active_sos", None)
+    st.session_state.pop("ambulance_waiting_at_sos", None)
+    st.session_state["startup_session_init"] = True
+
+# Leer destino real publicado por el operador
+state = load_state()
+destination_id = str(state.get("destination", {}).get("centro_id", "")).strip()
+destination_name = str(state.get("destination", {}).get("nombre", "")).strip()
+traffic_alerts = [str(a) for a in state.get("traffic_alerts", []) if str(a).strip()]
+active_sos = get_active_sos()
+render_state_debug(state, destination_id, destination_name, traffic_alerts)
+
+candidate = pd.DataFrame()
+if destination_id:
+    candidate = df_hospitales[df_hospitales["centro_id"].astype(str).str.strip().str.upper() == destination_id.upper()]
+if candidate.empty and destination_name:
+    name_norm = destination_name.lower().strip()
+    candidate = df_hospitales[
+        df_hospitales["nombre"].astype(str).str.lower().str.strip().eq(name_norm)
+        | df_hospitales["nombre"].astype(str).str.lower().str.contains(name_norm, regex=False)
+    ]
+
+has_destination = (not candidate.empty) and (destination_id or destination_name)
+was_waiting_at_sos = bool(st.session_state.get("ambulance_waiting_at_sos", False))
+route_status = "Ruta en curso: ambulancia desplazandose a la señal SOS."
+route_to_sos = []
+route_to_hospital = []
+selected_hospital = None
+selected_base = _best_base_to_target(int(active_sos['nodo_red']))
+
+route_nodes_to_sos = _route_nodes(int(selected_base['nodo_red']), int(active_sos['nodo_red']))
+if route_nodes_to_sos:
+    route_to_sos = _route_coords(route_nodes_to_sos)
+else:
+    route_to_sos = [[float(selected_base['lat']), float(selected_base['lon'])], [float(active_sos['lat']), float(active_sos['lon'])]]
+
+if len(route_to_sos) < 2:
+    route_to_sos = [[float(selected_base['lat']), float(selected_base['lon'])], [float(active_sos['lat']), float(active_sos['lon'])]]
+else:
+    final_sos_point = [float(active_sos['lat']), float(active_sos['lon'])]
+    if route_to_sos[-1] != final_sos_point:
+        route_to_sos.append(final_sos_point)
+
+selected_hospital_info = {
+    "nombre": "Destino pendiente por operador",
+    "lat": float(active_sos["lat"]),
+    "lon": float(active_sos["lon"]),
+    "direccion": "",
+    "especialidades": "",
+    "perfiles": "",
+    "occ": random.randint(30, 98),
+    "wait": random.randint(10, 120),
+}
+
+if has_destination:
+    selected_hospital = candidate.iloc[0]
+    selected_target = int(selected_hospital['nodo_red'])
+    route_nodes = _route_nodes(int(active_sos['nodo_red']), selected_target)
+    if was_waiting_at_sos:
+        route_status = "Orden recibida: salida inmediata desde SOS hacia el hospital indicado por operador."
+        route_to_sos = [[float(active_sos['lat']), float(active_sos['lon'])], [float(active_sos['lat']), float(active_sos['lon'])]]
+    else:
+        route_status = "Ruta en dos tramos: base → SOS y SOS → hospital indicado por operador."
+
+    if route_nodes:
+        route_to_hospital = _route_coords(route_nodes)
+    else:
+        route_status = "No existe una ruta conectada entre SOS y hospital. Se muestra una traza directa de respaldo para el segundo tramo."
+        route_to_hospital = []
+
+    if len(route_to_hospital) < 2:
+        route_to_hospital = [[float(active_sos['lat']), float(active_sos['lon'])], [float(selected_hospital['lat']), float(selected_hospital['lon'])]]
+        if route_status == "Ruta en dos tramos: base → SOS y SOS → hospital indicado por operador.":
+            route_status = "El tramo SOS → hospital se dibuja en modo directo de respaldo."
+    else:
+        final_hospital_point = [float(selected_hospital['lat']), float(selected_hospital['lon'])]
+        if route_to_hospital[-1] != final_hospital_point:
+            route_to_hospital.append(final_hospital_point)
+
+    selected_hospital_info = {
+        "nombre": str(selected_hospital.get("nombre", destination_name or "Hospital destino")),
+        "lat": float(selected_hospital["lat"]),
+        "lon": float(selected_hospital["lon"]),
+        "direccion": str(selected_hospital.get("direccion_completa", state.get("destination", {}).get("direccion", "") ) or ""),
+        "especialidades": str(selected_hospital.get("especialidades_texto", "") or ""),
+        "perfiles": str(selected_hospital.get("perfiles_atencion", "") or ""),
+        "occ": random.randint(30, 98),
+        "wait": random.randint(10, 120),
     }
+    st.session_state["ambulance_waiting_at_sos"] = False
 
+if destination_id and destination_name and candidate.empty:
+    route_status = "Destino recibido pero no localizado en la base; la ambulancia llega al SOS y espera nueva orden del operador."
 
-def render_navigation_map(route_data: Dict[str, Any], destination: Dict[str, Any], alerts: List[str], eta_min: int) -> None:
-    coords_json = json.dumps(route_data["coords"])
-    instructions_json = json.dumps(route_data["instructions"])
-    alerts_json = json.dumps(alerts)
+if not has_destination and not (destination_id or destination_name):
+    if was_waiting_at_sos:
+        route_status = "Ambulancia en punto SOS, esperando orden del operador."
+        route_to_sos = [[float(active_sos['lat']), float(active_sos['lon'])], [float(active_sos['lat']), float(active_sos['lon'])]]
+    else:
+        route_status = "Ruta en curso: base → SOS. Al llegar al SOS, la ambulancia quedara esperando la orden del operador."
+    st.session_state["ambulance_waiting_at_sos"] = True
 
-    html = f"""
+auto_refresh_waiting = bool(st.session_state.get("ambulance_waiting_at_sos", False)) and not has_destination
+
+st.info(route_status)
+
+operativo = {
+    "hospitales": [
+        {
+            "nombre": str(row.get("nombre", "Hospital")),
+            "lat": float(row["lat"]),
+            "lon": float(row["lon"]),
+            "nodo_red": int(row["nodo_red"]),
+            "direccion": str(row.get("direccion_completa", "") or ""),
+            "especialidades": str(row.get("especialidades_texto", "") or ""),
+            "perfiles": str(row.get("perfiles_atencion", "") or ""),
+            "occ": random.randint(35, 98),
+            "wait": random.randint(8, 125),
+        }
+        for _, row in df_hospitales.iterrows()
+    ],
+    "gps_sos": route_to_sos,
+    "gps_ida": route_to_hospital,
+    "destino": selected_hospital_info,
+    "origen": selected_base,
+    "sos": active_sos,
+    "esperando_destino": not has_destination,
+    "auto_refresh_waiting": auto_refresh_waiting,
+    "mensaje": f"<b>Señal SOS activa</b><br>{active_sos['nombre']}<br>La ambulancia acudira primero al SOS y despues al hospital indicado",
+}
+
+ambu_json = json.dumps(AMBULATORIOS)
+zonas_json = json.dumps(ZONAS_TRAFICO)
+operativos_json = json.dumps([operativo])
+alerts_json = json.dumps(traffic_alerts if traffic_alerts else ["Atasco moderado en la vía principal", "Obras puntuales en acceso secundario"])
+
+html_crudo = """
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset=\"utf-8\" />
-  <link rel=\"stylesheet\" href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\" />
-  <script src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\"></script>
-  <style>
-    html, body, #map {{ height: 100%; width: 100%; margin: 0; }}
-    #hud {{
-      position: absolute; top: 14px; right: 14px; z-index: 1200;
-      background: rgba(255,255,255,0.96); border-radius: 12px; padding: 12px 14px;
-      border: 1px solid rgba(0,0,0,0.14); box-shadow: 0 6px 14px rgba(0,0,0,0.14);
-      font-family: Arial, sans-serif; width: 340px;
-    }}
-    .title {{ font-weight: 700; font-size: 13px; color: #0b5cab; margin-bottom: 8px; text-transform: uppercase; }}
-    .kpi {{ font-size: 13px; margin: 4px 0; display: flex; justify-content: space-between; gap: 10px; }}
-    .instruction {{ margin-top: 8px; font-size: 15px; font-weight: 700; color: #111; line-height: 1.25; }}
-    .alerts {{ margin-top: 8px; max-height: 100px; overflow: auto; font-size: 12px; color: #a33; }}
-    .alerts li {{ margin-bottom: 4px; }}
-    .amb {{ font-size: 30px; }}
-  </style>
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; background-color: #f4f4f4; overflow: hidden; }
+        @keyframes pulseRed { 0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); } 70% { box-shadow: 0 0 0 15px rgba(220, 53, 69, 0); } 100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); } }
+        .sos-marker {
+            background-color: #dc3545; border: 2px solid white; border-radius: 50%;
+            color: white; font-weight: 700; font-size: 14px; text-align: center; line-height: 28px;
+            box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); animation: pulseRed 1.4s infinite;
+        }
+        .punto-paciente { 
+            background-color: #dc3545; border: 2px solid white; border-radius: 50%; 
+            animation: pulseRed 1.5s infinite; color: white; font-weight: bold; 
+            font-size: 9px; text-align: center; line-height: 22px; 
+            box-shadow: 0 2px 5px rgba(0,0,0,0.5); z-index: 1000 !important;
+        }
+        .ruta-holografica { stroke-dasharray: 10, 15; animation: flowDash 1s linear infinite; }
+        @keyframes flowDash { to { stroke-dashoffset: -25; } }
+        .amb-icon { font-size: 32px; text-shadow: 2px 2px 5px rgba(0,0,0,0.8); text-align: center; z-index: 1001 !important; }
+        .hosp-marker { background-color: white; border: 3px solid; border-radius: 50%; text-align: center; line-height: 24px; font-size: 16px; box-shadow: 0 3px 6px rgba(0,0,0,0.4); transition: all 0.5s ease; }
+        .hosp-green { border-color: #2ecc71; }
+        .hosp-orange { border-color: #f39c12; }
+        .hosp-red { border-color: #e74c3c; }
+        @keyframes glowTarget { 0% { box-shadow: 0 0 5px 2px rgba(52, 152, 219, 0.5); } 50% { box-shadow: 0 0 20px 8px rgba(52, 152, 219, 0.8); } 100% { box-shadow: 0 0 5px 2px rgba(52, 152, 219, 0.5); } }
+        .hosp-target { border-color: #3498db !important; animation: glowTarget 1.5s infinite; z-index: 900 !important; transform: scale(1.2); }
+        .ambu-marker { background-color: #e8f4f8; border: 2px solid #3498db; border-radius: 5px; text-align: center; line-height: 22px; font-size: 16px; }
+        .custom-tip { font-family: Arial, sans-serif; font-size: 13px; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); border: none; text-align: center; }
+        .traffic-tip { background-color: rgba(255,255,255,0.9); font-weight: bold; }
+        .progress-bg { background: #e0e0e0; width: 100%; height: 8px; border-radius: 4px; margin-top: 4px; overflow: hidden; }
+        .progress-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+        #hud { position: absolute; top: 14px; right: 14px; z-index: 1200; background: rgba(255,255,255,0.95); border-radius: 10px; padding: 10px 12px; border: 1px solid rgba(0,0,0,0.12); width: 320px; font-family: Arial, sans-serif; }
+        .row { display: flex; justify-content: space-between; margin: 4px 0; font-size: 13px; }
+        .alerts { margin-top: 8px; font-size: 12px; max-height: 90px; overflow: auto; }
+    </style>
 </head>
 <body>
-  <div id=\"hud\">
-    <div class=\"title\">Conductor · Navegacion asistida</div>
-    <div class=\"kpi\"><span>Destino</span><b>{destination['nombre']}</b></div>
-    <div class=\"kpi\"><span>Direccion</span><b>{destination['direccion']}</b></div>
-    <div class=\"kpi\"><span>ETA</span><b id=\"eta\">{eta_min} min</b></div>
-    <div class=\"instruction\" id=\"instruction\">Inicia ruta</div>
-    <div class=\"alerts\"><b>Alertas de via</b><ul id=\"alerts\"></ul></div>
-  </div>
-  <div id=\"map\"></div>
+    <div id="hud">
+      <div class="row"><b>Conductor Smart City</b><span>🚑</span></div>
+      <div class="row"><span>Destino</span><b id="kDestino">-</b></div>
+      <div class="row"><span>ETA</span><b id="kEta">-</b></div>
+      <div class="row"><span>Distancia</span><b id="kDist">-</b></div>
+      <div class="alerts"><b>Alertas</b><ul id="alerts"></ul></div>
+    </div>
+    <div id="map"></div>
 
-  <script>
-    const coords = {coords_json};
-    const instructions = {instructions_json};
-    const alerts = {alerts_json};
+    <script>
+        const ambulatorios = __AMBULATORIOS__;
+        const zonasTrafico = __ZONAS_TRAFICO__;
+        const operativos = __OPERATIVOS__;
+        const alerts = __ALERTS__;
 
-    const map = L.map('map', {{ preferCanvas: true, zoomControl: false }}).setView(coords[0], 16);
-    L.tileLayer('https://{{s}}.basemaps.cartocdn.com/rastertiles/voyager/{{z}}/{{x}}/{{y}}{{r}}.png').addTo(map);
+        const map = L.map('map', {preferCanvas: true}).setView([40.4168, -3.7038], 13);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png').addTo(map);
 
-    const routeLine = L.polyline(coords, {{ color: '#1a73e8', weight: 7, opacity: 0.9 }}).addTo(map);
-    const ambIcon = L.divIcon({{ className: 'amb', html: '🚑', iconSize:[34,34], iconAnchor:[17,17] }});
-    const marker = L.marker(coords[0], {{ icon: ambIcon }}).addTo(map);
-    L.marker(coords[coords.length - 1]).addTo(map).bindTooltip('Hospital destino');
+        // Restore parent page scroll after auto-refresh to avoid visual jump.
+        try {
+            const savedY = window.parent.sessionStorage.getItem('conductorScrollY');
+            if (savedY !== null) {
+                window.parent.scrollTo(0, parseInt(savedY, 10));
+                window.parent.sessionStorage.removeItem('conductorScrollY');
+            }
+        } catch (e) {}
 
-    const alertsEl = document.getElementById('alerts');
-    alerts.forEach((a) => {{
-      const li = document.createElement('li');
-      li.textContent = a;
-      alertsEl.appendChild(li);
-    }});
+        zonasTrafico.forEach(function(zona) {
+            if (zona.nivel === "Bajo") return;
+            const colorFondo = zona.nivel === "Alto" ? '#ff4d4d' : '#ffcc00';
+            L.circle([zona.lat, zona.lon], { radius: zona.radio, color: colorFondo, fillColor: colorFondo, fillOpacity: 0.12, weight: 1, opacity: 0.25 })
+              .bindTooltip("🚥 Tráfico: <b>" + zona.nivel + "</b>", { direction: 'center', className: 'custom-tip traffic-tip' })
+              .addTo(map);
+        });
 
-    function nextInstructionText(idx) {{
-      let txt = 'Sigue recto';
-      for (const it of instructions) {{
-        if (idx <= it.idx) {{
-          txt = it.text;
-          break;
-        }}
-      }}
-      return txt;
-    }}
+        ambulatorios.forEach(function(a) {
+            const icon = L.divIcon({className: 'ambu-marker', html: '🩺', iconSize: [26,26], iconAnchor: [13,13]});
+            L.marker([a.lat, a.lon], {icon: icon}).bindTooltip("<b>Base SVB</b><br>" + a.nombre, {direction: 'top', className: 'custom-tip'}).addTo(map);
+        });
 
-    let i = 0;
-    let eta = {eta_min};
-    map.fitBounds(routeLine.getBounds().pad(0.2));
+        const alertsEl = document.getElementById('alerts');
+        alerts.forEach((a) => {
+          const li = document.createElement('li');
+          li.textContent = a;
+          alertsEl.appendChild(li);
+        });
 
-    const tick = () => {{
-      if (!coords.length) return;
-      i = Math.min(i + 1, coords.length - 1);
-      marker.setLatLng(coords[i]);
-      map.setView(coords[i], 17, {{ animate: true, duration: 0.8 }});
+        const op = operativos[0];
+        document.getElementById('kDestino').textContent = op.esperando_destino ? 'Esperando operador' : op.destino.nombre;
 
-      document.getElementById('instruction').textContent = nextInstructionText(i);
-      const ratio = 1 - i / Math.max(1, coords.length - 1);
-      const etaNow = Math.max(1, Math.round(eta * ratio));
-      document.getElementById('eta').textContent = `${{etaNow}} min`;
-    }};
+        const sosIcon = L.divIcon({className: 'sos-marker', html: 'SOS', iconSize: [28,28], iconAnchor: [14,14]});
+        const markerSOS = L.marker([op.sos.lat, op.sos.lon], {icon: sosIcon}).addTo(map);
+        markerSOS.bindTooltip('<b>Señal de socorro</b><br>' + op.sos.nombre, {direction: 'top', className: 'custom-tip'});
 
-    setInterval(tick, 1200);
-  </script>
+        const hospitalMarkers = {};
+        op.hospitales.forEach(function(h) {
+            const colorClass = (h.occ > 85 ? 'hosp-red' : (h.occ > 50 ? 'hosp-orange' : 'hosp-green'));
+            const barColor = h.occ > 85 ? '#e74c3c' : (h.occ > 50 ? '#f39c12' : '#2ecc71');
+            const icon = L.divIcon({className: 'hosp-marker ' + colorClass, html: '🏥', iconSize: [30,30], iconAnchor: [15,15]});
+            const marker = L.marker([h.lat, h.lon], {icon: icon}).addTo(map);
+            const tipHTML = `
+              <div style="text-align: left;">
+                <center><b>${h.nombre}</b></center><hr style="margin:4px 0;">
+                <div>📍 <b>Dirección:</b><br>${h.direccion || 'No disponible'}</div>
+                <div style="margin-top:4px;">🩺 <b>Especialidades:</b><br>${h.especialidades || 'No disponible'}</div>
+                <div style="margin-top:4px;">🧠 <b>Perfiles:</b> ${h.perfiles || 'No definido'}</div>
+                🛏️ Ocupación: <b>${h.occ}%</b>
+                <div class="progress-bg"><div class="progress-fill" style="width: ${h.occ}%; background-color: ${barColor};"></div></div>
+                <div style="margin-top:4px;">⏱️ Espera: <b>${h.wait} min</b></div>
+              </div>`;
+            marker.bindTooltip(tipHTML, {direction: 'top', offset: [0, -15], className: 'custom-tip'});
+            hospitalMarkers[h.nombre] = marker;
+        });
+
+        function densificar(ruta, maxDist) {
+            const nueva = [];
+            for (let i = 0; i < ruta.length - 1; i++) {
+                const p1 = ruta[i], p2 = ruta[i + 1];
+                const dist = Math.sqrt(Math.pow(p2[0] - p1[0], 2) + Math.pow(p2[1] - p1[1], 2));
+                const pasos = Math.max(1, Math.ceil(dist / maxDist));
+                for (let j = 0; j < pasos; j++) {
+                    nueva.push([p1[0] + (p2[0]-p1[0]) * (j/pasos), p1[1] + (p2[1]-p1[1]) * (j/pasos)]);
+                }
+            }
+            nueva.push(ruta[ruta.length - 1]);
+            return nueva;
+        }
+
+        function haversineM(a, b) {
+          const R = 6371000;
+          const rad = x => x * Math.PI / 180;
+          const dLat = rad(b[0]-a[0]), dLon = rad(b[1]-a[1]);
+          const h = Math.sin(dLat/2)**2 + Math.cos(rad(a[0]))*Math.cos(rad(b[0]))*Math.sin(dLon/2)**2;
+          return 2*R*Math.atan2(Math.sqrt(h), Math.sqrt(1-h));
+        }
+
+        function remainingDist(idx, ruta) {
+          let d = 0;
+          for (let k = idx; k < ruta.length - 1; k++) d += haversineM(ruta[k], ruta[k+1]);
+          return d;
+        }
+
+                const gpsSos = op.gps_sos || [];
+                const gpsHosp = op.gps_ida || [];
+                const ambStart = [op.origen.lat, op.origen.lon];
+                const hasSosRoute = gpsSos.length >= 2;
+                const hasHospRoute = !op.esperando_destino && gpsHosp.length >= 2;
+
+                const sosSuave = hasSosRoute ? densificar(gpsSos, 0.00018) : [ambStart, [op.sos.lat, op.sos.lon]];
+                const hospSuave = hasHospRoute ? densificar(gpsHosp, 0.00018) : [[op.sos.lat, op.sos.lon]];
+
+                const routeLineSos = hasSosRoute ? L.polyline(gpsSos, {color: '#ff7a18', weight: 4, opacity: 0.55, dashArray: '10,10'}).addTo(map) : null;
+                const routeLineHosp = hasHospRoute ? L.polyline(gpsHosp, {color: '#1a73e8', weight: 4, opacity: 0.5, dashArray: '8,10'}).addTo(map) : null;
+                const doneLine = L.polyline([sosSuave[0]], {color: '#19e872', weight: 5, opacity: 0.9}).addTo(map);
+
+        const ambIcon = L.divIcon({className: 'amb-icon', html: '🚑', iconSize: [32,32], iconAnchor: [16,16]});
+        const markerAmb = L.marker(sosSuave[0], {icon: ambIcon}).addTo(map);
+
+                if (!op.esperando_destino && hospitalMarkers[op.destino.nombre]) {
+          hospitalMarkers[op.destino.nombre].setIcon(
+            L.divIcon({className: 'hosp-marker hosp-target', html: '🏥🏁', iconSize: [36,36], iconAnchor: [18,18]})
+          );
+          hospitalMarkers[op.destino.nombre].bindTooltip(op.mensaje, {direction: 'top', className: 'custom-tip'});
+        }
+
+                if (hasHospRoute && routeLineHosp) {
+                    map.fitBounds(routeLineHosp.getBounds().pad(0.2));
+                } else if (hasSosRoute && routeLineSos) {
+                    map.fitBounds(routeLineSos.getBounds().pad(0.2));
+                } else {
+                    map.setView(ambStart, 14);
+                    document.getElementById('kEta').textContent = '--';
+                    document.getElementById('kDist').textContent = '0 m';
+                }
+
+                const pasoAnimacion = 4;
+                const tickMs = 50;
+
+                function animarRuta(path, etaBase, onFinish) {
+                    let idx = 0;
+                    function step() {
+                        if (idx >= path.length) {
+                            if (onFinish) onFinish();
+                            return;
+                        }
+                        markerAmb.setLatLng(path[idx]);
+                        doneLine.setLatLngs(path.slice(0, idx + 1));
+                        const progress = idx / Math.max(1, path.length - 1);
+                        const etaNow = Math.max(0, Math.round(etaBase * (1 - progress)));
+                        const rem = remainingDist(idx, path);
+                        document.getElementById('kEta').textContent = etaNow + ' min';
+                        document.getElementById('kDist').textContent = rem >= 1000 ? (rem / 1000).toFixed(1) + ' km' : Math.round(rem) + ' m';
+                        idx += pasoAnimacion;
+                        setTimeout(step, tickMs);
+                    }
+                    step();
+                }
+
+                const etaSos = Math.max(1, Math.round((gpsSos.length || 2) / 10));
+                const etaHosp = Math.max(1, Math.round((gpsHosp.length || 2) / 10));
+
+                setTimeout(() => {
+                    animarRuta(sosSuave, etaSos, () => {
+                        markerAmb.setLatLng([op.sos.lat, op.sos.lon]);
+                        doneLine.setLatLngs(sosSuave);
+                        document.getElementById('kDist').textContent = '0 m';
+                        if (!hasHospRoute) {
+                            document.getElementById('kEta').textContent = '--';
+                            if (op.auto_refresh_waiting) {
+                                setTimeout(() => {
+                                    try {
+                                        window.parent.sessionStorage.setItem('conductorScrollY', String(window.parent.scrollY || 0));
+                                    } catch (e) {}
+                                    window.parent.location.reload();
+                                }, 1500);
+                            }
+                            return;
+                        }
+                        setTimeout(() => {
+                            animarRuta(hospSuave, etaHosp, () => {
+                                document.getElementById('kEta').textContent = '0 min';
+                                document.getElementById('kDist').textContent = '0 m';
+                            });
+                        }, 900);
+                    });
+                }, 120);
+    </script>
 </body>
 </html>
 """
 
-    components.html(html, height=760)
+html_mapa = html_crudo.replace("__AMBULATORIOS__", ambu_json)\
+                      .replace("__ZONAS_TRAFICO__", zonas_json)\
+                      .replace("__OPERATIVOS__", operativos_json)\
+                      .replace("__ALERTS__", alerts_json)
 
-
-def main() -> None:
-    st.title("AmbulancIA - Conductor (Navegacion)")
-    st.caption("Interfaz tipo navegador: mapa en movimiento, indicaciones de giro, ETA y alertas de trafico/obras.")
-
-    graph = load_graph()
-    hospitals = load_hospitals(graph)
-    bases = load_bases(graph)
-    state = load_state()
-
-    destination_id = str(state.get("destination", {}).get("centro_id", "")).strip()
-    destination_name = str(state.get("destination", {}).get("nombre", "")).strip()
-    alerts = [str(a) for a in state.get("traffic_alerts", []) if str(a).strip()]
-    if not alerts:
-        alerts = [
-            "Atasco moderado en la via principal",
-            "Obras puntuales en acceso secundario",
-        ]
-
-    if destination_id:
-        candidate = hospitals[hospitals["centro_id"].astype(str) == destination_id]
-        if not candidate.empty:
-            dest_row = candidate.iloc[0]
-        else:
-            dest_row = hospitals.iloc[0]
-    else:
-        dest_row = hospitals.iloc[0]
-
-    route_data = build_route_and_instructions(graph, bases, dest_row)
-
-    if route_data["length_m"] > 0:
-        computed_eta = max(4, int(round(route_data["length_m"] / 1000 * 2.2)))
-    else:
-        computed_eta = 10
-
-    eta_min = int(state.get("destination", {}).get("eta_min") or computed_eta)
-    destination_info = {
-        "centro_id": str(dest_row.get("centro_id", "")),
-        "nombre": destination_name or str(dest_row.get("nombre", "Hospital destino")),
-        "direccion": str(dest_row.get("direccion_completa", state.get("destination", {}).get("direccion", ""))),
-        "telefono": str(dest_row.get("telefono", state.get("destination", {}).get("telefono", ""))),
-    }
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("Caso", str(state.get("case", {}).get("summary", "Sin caso activo")))
-    with c2:
-        st.metric("Destino", destination_info["nombre"])
-    with c3:
-        st.metric("ETA", f"{eta_min} min")
-
-    st.markdown("**Siguiente indicacion**")
-    if route_data["instructions"]:
-        st.info(route_data["instructions"][0]["text"])
-    else:
-        st.info("Inicia ruta")
-
-    st.markdown("**Alertas activas**")
-    for al in alerts[:5]:
-        st.warning(al)
-
-    render_navigation_map(route_data, destination_info, alerts, eta_min)
-
-
-if __name__ == "__main__":
-    main()
+components.html(html_mapa, height=1000)

@@ -6,6 +6,10 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import networkx as nx
 import osmnx as ox
 import pandas as pd
@@ -14,17 +18,12 @@ import streamlit.components.v1 as components
 
 from visual import operator_service as op
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BASE_DIR = Path(__file__).resolve().parent
 GRAPH_PATH = BASE_DIR / "madrid_grafo.graphml"
 PROCESSED_HOSPITALES_PATH = (
     PROJECT_ROOT / "analisis_datos" / "data" / "processed" / "centros_servicios_establecimientos_sanitarios_limpio.csv"
 )
 SAMUR_BASES_PATH = PROJECT_ROOT / "analisis_datos" / "data" / "processed" / "bases_samur_madrid.csv"
-
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
 
 @st.cache_resource
 def map_load_graph_with_traffic() -> nx.MultiDiGraph:
