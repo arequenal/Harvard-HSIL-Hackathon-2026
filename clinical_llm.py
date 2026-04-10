@@ -8,6 +8,8 @@ import re
 import urllib.request
 from typing import Any, Dict, List, Tuple
 
+from groq import Groq
+
 
 VITAL_COLUMNS = [
     "edad",
@@ -48,9 +50,9 @@ BINARY_PAIR_COLUMNS = [
 
 FEATURE_ORDER = [*VITAL_COLUMNS, *BINARY_PAIR_COLUMNS]
 
-DEFAULT_MODEL = os.getenv("AMBULANCIA_LLM_MODEL", "llama3.1:8b-instruct")
-DEFAULT_PROVIDER = os.getenv("AMBULANCIA_LLM_PROVIDER", "ollama")
-DEFAULT_BASE_URL = os.getenv("AMBULANCIA_LLM_BASE_URL", "http://localhost:11434")
+DEFAULT_MODEL = os.getenv("AMBULANCIA_LLM_MODEL", "llama-3.3-70b-versatile")
+DEFAULT_PROVIDER = os.getenv("AMBULANCIA_LLM_PROVIDER", "groq")
+DEFAULT_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 FACTOR_PATTERNS: Dict[str, Dict[str, List[str]]] = {
     "inicio_subito": {
@@ -149,39 +151,46 @@ FACTOR_PATTERNS: Dict[str, Dict[str, List[str]]] = {
 
 
 def build_prompt(diagnosis_text: str) -> str:
-    """Build a strict extraction prompt for Llama 3."""
+    """Build a strict extraction prompt for medical data structures."""
 
     schema = _empty_feature_map()
     ordered_columns = ", ".join(FEATURE_ORDER)
 
     return (
-        "Eres un operador del 112 en Espana con mas de 20 anos de experiencia en emergencias prehospitalarias. "
-        "Has atendido miles de llamadas reales y sabes diferenciar lo afirmado, lo negado y lo no mencionado con precision clinica. "
-        "Tu tarea ahora es extraer datos estructurados para un dataset de entrenamiento.\n\n"
-        "OBJETIVO: convertir el texto de una llamada/nota clinica en un JSON con TODAS las columnas del dataset (excepto especialidad y nivel_urgencia).\n"
-        "Debes devolver SIEMPRE todas las claves, sin omitir ninguna, y con valor numerico.\n\n"
-        "REGLAS CLAVE (OBLIGATORIAS):\n"
-        "1) No inventes informacion: solo usa lo que este en el texto.\n"
-        "2) Para cada factor binario duplicado (X_presente / X_negado):\n"
-        "   - Si el sintoma/factor aparece afirmado: X_presente=1 y X_negado=0.\n"
-        "   - Si aparece negado explicitamente: X_presente=0 y X_negado=1.\n"
-        "   - Si no aparece de ninguna forma: X_presente=0 y X_negado=0.\n"
-        "3) Si en el texto aparecen tanto afirmacion como negacion del mismo factor en momentos distintos, marca ambos en 1.\n"
-        "4) Todas las columnas no mencionadas deben quedarse en 0.\n"
-        "5) Sexo: hombre/varon/masculino=1, mujer/femenino=0, desconocido=0.\n"
-        "6) Valores numericos (edad y constantes vitales):\n"
-        "   - Si se mencionan claramente, extraelos como numero.\n"
-        "   - Si no se mencionan, pon 0.\n"
-        "   - Presion arterial tipo 178/102 -> presion_sistolica=178 y presion_diastolica=102.\n"
-        "   - Escala Glasgow: extrae el numero si aparece (por ejemplo GCS 13, Glasgow 15/15).\n"
-        "7) Responde SOLO JSON valido. Sin markdown, sin explicaciones, sin texto extra.\n"
-        "8) No anadas claves nuevas ni cambies nombres.\n\n"
-        "Columnas exactas y orden objetivo del vector:\n"
+        "CONTEXTO: Eres un especialista clinico en medicina de emergencias prehospitalarias (EMS) con expertise en triaje y clasificacion de urgencias en el sistema 112 espanol. "
+        "Tu mision es extraer datos medicos estructurados de narrativas libres (llamadas/notas clinicas) para entrenamiento de modelos de IA.\n\n"
+        "OBJETIVO PRIMARIO: Convertir el texto de entrada en un JSON con TODAS las columnas requeridas. "
+        "Cada columna debe tener un valor numerico valido (0, 1, o valor cuantitativo segun corresponda).\n\n"
+        "REGLAS DE EXTRACCION (CRITICAS - SEGUIR AL PIE):\n\n"
+        "A) FACTORES BINARIOS PRESENCIA/NEGACION:\n"
+        "   Para CADA factor (dolor_toracico, disnea, etc.), devuelve SIEMPRE dos columnas: X_presente y X_negado.\n"
+        "   - X_presente=1, X_negado=0:  El paciente AFIRMA tener el sintoma (ej: 'tiene dolor de pecho').\n"
+        "   - X_presente=0, X_negado=1:  El paciente NIEGA explicitamente (ej: 'no tiene dolor', 'lo niega').\n"
+        "   - X_presente=0, X_negado=0:  El sintoma NO se menciona en absoluto en el texto.\n"
+        "   - X_presente=1, X_negado=1:  Solo si el paciente afirma Y luego niega en diferentes momentos (raro, mantener ambos=1).\n\n"
+        "B) VALORES NUMERICOS (VITALES Y DEMOGRAFICOS):\n"
+        "   - edad: numero sin unidad (ej: 65, no '65 anos').\n"
+        "   - sexo: 1=hombre/varon/masculino, 0=mujer/femenino, 0=desconocido.\n"
+        "   - frecuencia_cardiaca, frecuencia_respiratoria: pulsaciones/min, respiraciones/min (numero puro).\n"
+        "   - presion_sistolica / presion_diastolica: Si ves '120/80', extrae sistolica=120, diastolica=80. Si solo aparece una cifra, usa esa. Si no aparece, usa 0.\n"
+        "   - saturacion_oxigeno: % (ej 95 para 95%, no 0.95).\n"
+        "   - temperatura: grados Celsius (ej 38.5, no 38.5°C en el JSON).\n"
+        "   - glucemia: mg/dL (ej 120).\n"
+        "   - escala_glasgow: numero entre 3-15 (ej: 'GCS 13' -> 13; 'Glasgow 15/15' -> 15). Si no se menciona, 0.\n"
+        "   Si un valor numerico NO aparece en el texto, pon 0 (NO dejes en blanco).\n\n"
+        "C) REGLAS GLOBALES:\n"
+        "   1. NUNCA inventes datos no presentes en el texto original.\n"
+        "   2. Toda columna no mencionada debe ser 0.\n"
+        "   3. Responde UNICAMENTE CON JSON VALIDO. Sin markdown, sin '//', sin explicaciones, sin texto adicional.\n"
+        "   4. No anadirás claves nuevas. Los campos son EXACTAMENTE los especificados abajo.\n"
+        "   5. Usa siempre valores numericos (enteros o decimales), nunca texto dentro de los valores numericos.\n\n"
+        "LISTA EXACTA DE COLUMNAS ESPERADAS (EN ORDEN):\n"
         f"{ordered_columns}\n\n"
-        "JSON esperado (ejemplo de estructura; usa tus valores extraidos):\n"
+        "EJEMPLO DE ESTRUCTURA JSON ESPERADA:\n"
         f"{json.dumps(schema, ensure_ascii=False, indent=2)}\n\n"
-        "Texto de la llamada/nota clinica a extraer:\n"
-        f"{diagnosis_text.strip()}"
+        "=== TEXTO A PROCESAR ===\n"
+        f"{diagnosis_text.strip()}\n\n"
+        "=== RESPUESTA (SOLO JSON, SIN DECORACIONES) ===\n"
     )
 
 
@@ -189,7 +198,7 @@ def analyze_clinical_diagnosis(
     diagnosis_text: str,
     model: str = DEFAULT_MODEL,
     provider: str = DEFAULT_PROVIDER,
-    base_url: str = DEFAULT_BASE_URL,
+    api_key: str = DEFAULT_API_KEY,
 ) -> Dict[str, Any]:
     """Convert free text into full dataset columns and a numeric feature vector."""
 
@@ -200,10 +209,11 @@ def analyze_clinical_diagnosis(
     raw_output = ""
     used_fallback = False
 
-    if provider == "ollama":
+    if provider == "groq":
         try:
-            raw_output = _call_ollama(cleaned_text, model=model, base_url=base_url)
-        except Exception:
+            raw_output = _call_groq(cleaned_text, model=model, api_key=api_key)
+        except Exception as e:
+            print(f"Groq error: {e}")
             used_fallback = True
     else:
         used_fallback = True
@@ -231,34 +241,37 @@ def analyze_clinical_diagnosis(
     }
 
 
-def _call_ollama(diagnosis_text: str, model: str, base_url: str) -> str:
-    payload = {
-        "model": model,
-        "stream": False,
-        "format": "json",
-        "messages": [
+def _call_groq(diagnosis_text: str, model: str, api_key: str) -> str:
+    """Call Groq API with structured medical data extraction."""
+    if not api_key:
+        raise ValueError(
+            "GROQ_API_KEY no configurada. "
+            "Obtén una gratis en https://console.groq.com"
+        )
+    
+    client = Groq(api_key=api_key)
+    
+    message = client.chat.completions.create(
+        model=model,
+        messages=[
             {
                 "role": "system",
                 "content": (
-                    "Eres un extractor de datos clinicos para entrenamiento de modelos. "
-                    "Devuelve exclusivamente un JSON valido con las claves solicitadas."
+                    "Eres un extractor de datos clinicos especializado en medicina de emergencias. "
+                    "Tu unica tarea es devolver un JSON valido con las claves solicitadas. "
+                    "NO anadirás explicaciones ni texto extra. Solo JSON."
                 ),
             },
-            {"role": "user", "content": build_prompt(diagnosis_text)},
+            {
+                "role": "user",
+                "content": build_prompt(diagnosis_text),
+            },
         ],
-    }
-
-    request = urllib.request.Request(
-        f"{base_url.rstrip('/')}/api/chat",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
+        temperature=0.1,
+        max_tokens=2048,
     )
-
-    with urllib.request.urlopen(request, timeout=120) as response:
-        response_payload = json.loads(response.read().decode("utf-8"))
-
-    content = response_payload.get("message", {}).get("content", "")
+    
+    content = message.choices[0].message.content
     if not content:
         raise ValueError("El modelo no devolvio contenido.")
     return content

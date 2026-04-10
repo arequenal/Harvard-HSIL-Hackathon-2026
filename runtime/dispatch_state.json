@@ -1,0 +1,25 @@
+{
+  "version": 7,
+  "updated_at": "2026-04-10T16:24:58.142957+00:00",
+  "case": {
+    "summary": "Nivel 4 - Muy urgente / Medicina intensiva",
+    "source_text": "Paciente varón de 67 anos con dolor toracico opresivo. Disneya. Precio arterial 178 sobre 102. Saturación 90 Glass WoW 13.",
+    "urgencia": "Nivel 4 - Muy urgente",
+    "especialidad": "Medicina intensiva",
+    "explicacion_urgencia": "La urgencia estimada es Nivel 4 - Muy urgente con confianza 1.00. Se apoya en hallazgos del vector como: Edad avanzada (67 anos), Saturacion baja (90%), Dolor toracico presente. Esta explicacion es orientativa y debe validarse con criterio clinico del equipo asistencial.",
+    "explicacion_especialidad": "Se le quiere llevar a Medicina intensiva con confianza 1.00, debido a que presenta sintomas de edad avanzada (67 anos), saturacion baja (90%), dolor toracico presente asociadas normalmente a problemas como patologia cardiovascular aguda o dolor toracico de alto riesgo, hipoxemia clinicamente relevante."
+  },
+  "destination": {
+    "centro_id": "CH0080",
+    "nombre": "Hospital CH0080",
+    "telefono": "+34 911000000",
+    "email": "admisiones.ch0080@hospital.madrid.es",
+    "direccion": "CALLE Budapest 1 Alcorcón 28922",
+    "eta_min": 12
+  },
+  "traffic_alerts": [
+    "Atasco severo en eje principal",
+    "Obras en carril de acceso"
+  ],
+  "operator_notes": "Está calvo el paciente"
+}
