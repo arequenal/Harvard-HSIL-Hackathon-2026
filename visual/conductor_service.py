@@ -123,13 +123,6 @@ def compute_route(
     destination_centro_id: str,
 ) -> Dict[str, Any]:
     nodes = list(graph.nodes())
-    emergency_node = random.choice(nodes)
-    lat_em = float(graph.nodes[emergency_node]["y"])
-    lon_em = float(graph.nodes[emergency_node]["x"])
-
-    base = min(bases, key=lambda b: (b["lat"] - lat_em) ** 2 + (b["lon"] - lon_em) ** 2)
-    route_to_em = nx.shortest_path(graph, source=base["nodo_red"], target=emergency_node, weight="length")
-
     destination = None
     if destination_centro_id:
         filtered = hospitals[hospitals["centro_id"].astype(str) == str(destination_centro_id)]
@@ -138,15 +131,34 @@ def compute_route(
     if destination is None:
         destination = hospitals.iloc[0]
 
-    route_to_hosp = nx.shortest_path(
-        graph,
-        source=emergency_node,
-        target=int(destination["nodo_red"]),
-        weight="weighted_length",
-    )
+    # El grafo puede ser direccional y no siempre existe camino entre nodos aleatorios.
+    # Reintentamos varias veces antes de caer a una ruta sintética para no romper la interfaz.
+    for _ in range(40):
+        emergency_node = random.choice(nodes)
+        lat_em = float(graph.nodes[emergency_node]["y"])
+        lon_em = float(graph.nodes[emergency_node]["x"])
 
-    gps_ida = [[float(graph.nodes[n]["y"]), float(graph.nodes[n]["x"])] for n in route_to_em]
-    gps_hosp = [[float(graph.nodes[n]["y"]), float(graph.nodes[n]["x"])] for n in route_to_hosp]
+        base = min(bases, key=lambda b: (b["lat"] - lat_em) ** 2 + (b["lon"] - lon_em) ** 2)
+
+        try:
+            route_to_em = nx.shortest_path(graph, source=base["nodo_red"], target=emergency_node, weight="length")
+            route_to_hosp = nx.shortest_path(
+                graph,
+                source=emergency_node,
+                target=int(destination["nodo_red"]),
+                weight="weighted_length",
+            )
+            gps_ida = [[float(graph.nodes[n]["y"]), float(graph.nodes[n]["x"])] for n in route_to_em]
+            gps_hosp = [[float(graph.nodes[n]["y"]), float(graph.nodes[n]["x"])] for n in route_to_hosp]
+            break
+        except nx.NetworkXNoPath:
+            continue
+    else:
+        emergency_node = base["nodo_red"]
+        lat_em = float(graph.nodes[emergency_node]["y"])
+        lon_em = float(graph.nodes[emergency_node]["x"])
+        gps_ida = [[float(base["lat"]), float(base["lon"])] , [lat_em, lon_em]]
+        gps_hosp = [[lat_em, lon_em], [float(destination["lat"]), float(destination["lon"])] ]
 
     return {
         "emergency": [lat_em, lon_em],
