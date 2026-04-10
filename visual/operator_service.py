@@ -15,7 +15,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from clinical_llm import FEATURE_ORDER, analyze_clinical_diagnosis
-from ml.urgency_specialty_classifier import transcribe_audio_file
+try:
+    from ml.urgency_specialty_classifier import transcribe_audio_file
+except ImportError:
+    transcribe_audio_file = None
 from visual.dispatch_shared import load_state, update_state
 
 PROCESSED_HOSPITALES_PATH = (
@@ -376,11 +379,17 @@ def main() -> None:
 
         a1, a2 = st.columns(2)
         with a1:
-            stt_model = st.selectbox("Modelo STT", ["tiny", "base", "small", "medium", "large-v3"], index=2)
+            stt_model = st.selectbox("Modelo STT", ["tiny", "base", "small", "medium", "large-v3"], index=3)
         with a2:
             stt_lang = st.selectbox("Idioma", ["es", "en", "auto"], index=0)
 
         if st.button("Transcribir", use_container_width=True):
+            if transcribe_audio_file is None:
+                st.error(
+                    "La funcion de transcripcion no esta disponible en ml/urgency_specialty_classifier.py. "
+                    "Puedes seguir usando el dispatch con texto manual."
+                )
+                st.stop()
             if selected_audio == "-- seleccionar --":
                 st.warning("Selecciona un archivo en audio/samples")
             else:
@@ -391,7 +400,7 @@ def main() -> None:
                         model_size=stt_model,
                         language=lang,
                         device="auto",
-                        compute_type="int8",
+                        compute_type="auto",
                     )
                     st.session_state["operator_text"] = tr["text"]
                     st.success("Transcripcion completada")
