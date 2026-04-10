@@ -8,10 +8,13 @@ Este modulo conecta:
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import pickle
+import shutil
 import sys
 from pathlib import Path
+from functools import lru_cache
 from typing import Any, Dict, List
 
 import pandas as pd
@@ -23,6 +26,121 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from clinical_llm import FEATURE_ORDER, analyze_clinical_diagnosis
+
+try:
+    import imageio_ffmpeg
+except ImportError:  # pragma: no cover - optional fallback dependency
+    imageio_ffmpeg = None
+
+
+def _resolve_ffmpeg() -> None:
+    if shutil.which("ffmpeg"):
+        return
+
+    if imageio_ffmpeg is None:
+        raise RuntimeError(
+            "No se encontro FFmpeg en el sistema ni la dependencia imageio-ffmpeg. "
+            "Instala imageio-ffmpeg o ffmpeg para habilitar la transcripcion de audio."
+        )
+
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    ffmpeg_dir = str(Path(ffmpeg_exe).resolve().parent)
+    os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
+
+
+def _resolve_device(device: str) -> str:
+    device = (device or "auto").strip().lower()
+    if device != "auto":
+        return device
+
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
+
+    return "cpu"
+
+
+def _resolve_compute_type(device: str, compute_type: str) -> str:
+    if compute_type and compute_type != "auto":
+        return compute_type
+
+    if device == "cuda":
+        return "float16"
+
+    return "int8"
+
+
+@lru_cache(maxsize=8)
+def _load_whisper_model(model_size: str, device: str, compute_type: str):
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError as exc:  # pragma: no cover - dependency check
+        raise RuntimeError(
+            "No se pudo importar faster-whisper. Instala la dependencia para habilitar la transcripcion de audio."
+        ) from exc
+
+    return WhisperModel(model_size, device=device, compute_type=compute_type)
+
+
+def transcribe_audio_file(
+    audio_path: str,
+    *,
+    model_size: str = "medium",
+    language: str | None = None,
+    device: str = "auto",
+    compute_type: str = "auto",
+) -> Dict[str, Any]:
+    """Transcribe un archivo de audio local y devuelve texto y metadatos."""
+
+    path = Path(audio_path)
+    if not path.exists():
+        raise FileNotFoundError(f"No se encontro el archivo de audio: {path}")
+
+    _resolve_ffmpeg()
+    resolved_device = _resolve_device(device)
+    resolved_compute_type = _resolve_compute_type(resolved_device, compute_type)
+    whisper_model = _load_whisper_model(model_size, resolved_device, resolved_compute_type)
+
+    effective_language = None if language in {None, "", "auto"} else language
+    segments, info = whisper_model.transcribe(
+        str(path),
+        language=effective_language,
+        vad_filter=True,
+        beam_size=5,
+        best_of=5,
+        temperature=0.0,
+        condition_on_previous_text=False,
+        no_speech_threshold=0.45,
+    )
+
+    segment_list = []
+    text_parts: List[str] = []
+    for segment in segments:
+        cleaned_text = segment.text.strip()
+        if cleaned_text:
+            text_parts.append(cleaned_text)
+        segment_list.append(
+            {
+                "start": float(segment.start),
+                "end": float(segment.end),
+                "text": cleaned_text,
+            }
+        )
+
+    return {
+        "audio_path": str(path),
+        "model_size": model_size,
+        "device": resolved_device,
+        "compute_type": resolved_compute_type,
+        "text": " ".join(text_parts).strip(),
+        "language": getattr(info, "language", effective_language or "unknown"),
+        "language_probability": float(getattr(info, "language_probability", 0.0) or 0.0),
+        "segments": segment_list,
+    }
 
 
 class AmbulanceTriagePipeline:
