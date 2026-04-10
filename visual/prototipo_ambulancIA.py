@@ -5,12 +5,14 @@ import networkx as nx
 import pandas as pd
 import random
 import json
+import sys
 from pathlib import Path
 import streamlit.components.v1 as components
 
-from clinical_llm import analyze_clinical_diagnosis
-
 BASE_DIR = Path(__file__).resolve().parent
+# Añadir la raíz del proyecto para que encuentre clinical_llm
+sys.path.append(str(BASE_DIR.parent))
+from clinical_llm import analyze_clinical_diagnosis
 GRAPH_PATH = BASE_DIR / "madrid_grafo.graphml"
 HOSPITALES_PATH = BASE_DIR / "hospitales_madrid_nodos.csv"
 PROCESSED_HOSPITALES_PATH = BASE_DIR.parent / "analisis_datos" / "data" / "processed" / "centros_servicios_establecimientos_sanitarios_limpio.csv"
@@ -58,11 +60,73 @@ pantalla_carga.markdown("""
 # ==============================================================================
 # 2. CARGA DE DATOS Y MOTOR DE TRÁFICO GLOBAL (En Caché)
 # ==============================================================================
+
+# --- VARIABLES DE OPTIMIZACIÓN Y ZONAS DE TRÁFICO ---
+#pesos de las variables en la función objetivo
+w_dist = 1.0
+w_occ = 50.0
+w_wait = 30.0
+
+#multiplican a la distancia según el nivel de tráfico de la zona en la que esté esa arista
+multiplicador_trafico_alto = 1.5
+multiplicador_trafico_medio = 1.25
+multiplicador_trafico_bajo = 1.0
+
+ZONAS_TRAFICO = [
+    {"lat": 40.4215, "lon": -3.6590, "radio": 1500, "nivel": "Alto"},   
+    {"lat": 40.3920, "lon": -3.6850, "radio": 1600, "nivel": "Alto"},   
+    {"lat": 40.4490, "lon": -3.6450, "radio": 1300, "nivel": "Alto"},   
+    {"lat": 40.4650, "lon": -3.6880, "radio": 1400, "nivel": "Medio"},  
+    {"lat": 40.4190, "lon": -3.7020, "radio": 1100, "nivel": "Medio"},  
+    {"lat": 40.4080, "lon": -3.6750, "radio": 900, "nivel": "Bajo"}     
+]
+
+import math
+def haversine_m(lat1, lon1, lat2, lon2):
+    R = 6371000
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
 @st.cache_resource
 def load_graph_with_traffic():
     G = ox.load_graphml(GRAPH_PATH)
+    
+    # Pre-calculamos los multiplicadores según las zonas
     for u, v, key, data in G.edges(keys=True, data=True):
-        traffic_factor = random.uniform(1.0, 3.0)
+        lat_u = G.nodes[u]['y']
+        lon_u = G.nodes[u]['x']
+        
+        # Asumimos que no hay tráfico por defecto (factor 1.0)
+        traffic_factor = 1.0
+        
+        # Verificamos si el nodo de origen de la arista cae en alguna zona de tráfico
+        # y nos quedamos con el nivel de tráfico más restrictivo/alto si hay solapamiento.
+        is_alto = False
+        is_medio = False
+        is_bajo = False
+        
+        for zona in ZONAS_TRAFICO:
+            dist = haversine_m(lat_u, lon_u, zona['lat'], zona['lon'])
+            if dist <= zona['radio']:
+                if zona['nivel'] == "Alto":
+                    is_alto = True
+                elif zona['nivel'] == "Medio":
+                    is_medio = True
+                elif zona['nivel'] == "Bajo":
+                    is_bajo = True
+                    
+        if is_alto:
+            traffic_factor = multiplicador_trafico_alto
+        elif is_medio:
+            traffic_factor = multiplicador_trafico_medio
+        elif is_bajo:
+            traffic_factor = multiplicador_trafico_bajo
+
         data['traffic_factor'] = traffic_factor
         data['weighted_length'] = data.get('length', 1.0) * traffic_factor
     return G
@@ -172,10 +236,12 @@ df_hospitales = cargar_hospitales(grafo)
 AMBULATORIOS = cargar_bases_samur(grafo)
 
 if df_hospitales.empty:
+    pantalla_carga.empty()
     st.error("No se pudieron cargar hospitales con coordenadas válidas.")
     st.stop()
 
 if not AMBULATORIOS:
+    pantalla_carga.empty()
     st.error("No se pudieron cargar bases SAMUR válidas.")
     st.stop()
 
@@ -236,16 +302,6 @@ if "diagnostico_llm_resultado" in st.session_state:
     with st.expander("Ver salida cruda del modelo", expanded=False):
         st.code(resultado_llm["raw_model_output"], language="json")
 
-# --- ZONAS DE TRÁFICO ---
-ZONAS_TRAFICO = [
-    {"lat": 40.4215, "lon": -3.6590, "radio": 1500, "nivel": "Alto"},   
-    {"lat": 40.3920, "lon": -3.6850, "radio": 1600, "nivel": "Alto"},   
-    {"lat": 40.4490, "lon": -3.6450, "radio": 1300, "nivel": "Alto"},   
-    {"lat": 40.4650, "lon": -3.6880, "radio": 1400, "nivel": "Medio"},  
-    {"lat": 40.4190, "lon": -3.7020, "radio": 1100, "nivel": "Medio"},  
-    {"lat": 40.4080, "lon": -3.6750, "radio": 900, "nivel": "Bajo"}     
-]
-
 # ==============================================================================
 # 3. PRE-CÁLCULO DEL BUCLE
 # ==============================================================================
@@ -275,7 +331,9 @@ if 'simulaciones_generadas' not in st.session_state:
         destino_hosp = None
         coords_em = []
 
-        while not acc_valido:
+        intentos = 0
+        while not acc_valido and intentos < 100:
+            intentos += 1
             nodo_emergencia = random.choice(lista_nodos)
             lat_em = grafo.nodes[nodo_emergencia]['y']
             lon_em = grafo.nodes[nodo_emergencia]['x']
@@ -283,20 +341,35 @@ if 'simulaciones_generadas' not in st.session_state:
             try:
                 bases_ordenadas = sorted(AMBULATORIOS, key=lambda a: (a['lat'] - lat_em)**2 + (a['lon'] - lon_em)**2)
                 ruta_ida = nx.shortest_path(grafo, source=bases_ordenadas[0]['nodo_red'], target=nodo_emergencia, weight='length')
-                ruta_vuelta = nx.shortest_path(grafo, source=nodo_emergencia, target=df_hospitales.iloc[0]['nodo_red'], weight='weighted_length')
                 
                 origen_amb = bases_ordenadas[0]
-                destino_hosp = hosp_datos_sim[0]
                 coords_em = [lat_em, lon_em]
                 acc_valido = True 
             except nx.NetworkXNoPath: 
                 continue 
-        
+                
+        if not acc_valido:
+            continue # Si después de 100 intentos no hay ruta, pasa a la siguiente simulación
+            
+        # 2. CALCULAR MEJOR HOSPITAL (y asegurar conexión)
         min_coste = float('inf')
+        destino_hosp = None
+        ruta_vuelta = None
+
+        # ==============================================================================
+        # FUNCIÓN OBJETIVO ABAJO: COSTE = DISTANCIA * W_DIST + OCUPACIÓN * W_OCC + ESPERA * W_WAIT
+        # ==============================================================================
+        """
+        Vamos hospital por hospital comprobando la función objetivo y quedándonos con el que menor coste tenga,
+        Si uno tiene coste menor que "min_coste" nos quedamos con ese, y así hasta acabar. Las tres variables de peso
+        están en la línea 65. Distancia_con_trafico es la distancia multiplicada por el multiplicador de tráfico.
+        """
+        
         for h in hosp_datos_sim:
             try:
-                w_dist = nx.shortest_path_length(grafo, source=nodo_emergencia, target=h['nodo_red'], weight='weighted_length')
-                coste = w_dist + (h['occ'] * 50) + (h['wait'] * 30)
+                # El peso de la distancia en el grafo (weighted_length) ya incluye los multiplicadores de tráfico
+                distancia_con_trafico = nx.shortest_path_length(grafo, source=nodo_emergencia, target=h['nodo_red'], weight='weighted_length')
+                coste = (distancia_con_trafico * w_dist) + (h['occ'] * w_occ) + (h['wait'] * w_wait)
                 if coste < min_coste:
                     ruta_prueba = nx.shortest_path(grafo, source=nodo_emergencia, target=h['nodo_red'], weight='weighted_length')
                     min_coste = coste
@@ -304,6 +377,11 @@ if 'simulaciones_generadas' not in st.session_state:
                     ruta_vuelta = ruta_prueba
             except nx.NetworkXNoPath: 
                 continue
+                
+        # Si ningún hospital era alcanzable desde esa emergencia, descartamos esta simulación y repetimos el intento en otra?
+        # Para ser robustos, si no hay ruta_vuelta, simplemente pasamos.
+        if not destino_hosp or not ruta_vuelta:
+            continue
         
         gps_ida_coords = [[grafo.nodes[n]['y'], grafo.nodes[n]['x']] for n in ruta_ida]
         gps_vuelta_coords = [[grafo.nodes[n]['y'], grafo.nodes[n]['x']] for n in ruta_vuelta]
