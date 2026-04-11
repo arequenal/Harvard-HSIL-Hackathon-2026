@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib
 import random
 import sys
 import unicodedata
@@ -17,7 +18,6 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from visual import operator_service as op
 from visual.dispatch_shared import load_state
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -26,6 +26,186 @@ PROCESSED_HOSPITALES_PATH = (
     PROJECT_ROOT / "analisis_datos" / "data" / "processed" / "centros_servicios_establecimientos_sanitarios_limpio.csv"
 )
 SAMUR_BASES_PATH = PROJECT_ROOT / "analisis_datos" / "data" / "processed" / "bases_samur_madrid.csv"
+
+
+@st.cache_resource
+def load_operator_service_embedded() -> Any:
+    """Importa operator_service sin aplicar efectos globales de estilo/config."""
+
+    original_set_page_config = st.set_page_config
+    try:
+        st.set_page_config = lambda *args, **kwargs: None  # type: ignore[assignment]
+        module = importlib.import_module("visual.operator_service")
+    finally:
+        st.set_page_config = original_set_page_config
+
+    return module
+
+
+def render_operator_service_embedded(op_module: Any) -> None:
+    """Renderiza op.main() sin hero duplicado dentro del panel unificado."""
+
+    original_markdown = st.markdown
+    hero_hidden = False
+
+    def _patched_markdown(body: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal hero_hidden
+        if isinstance(body, str) and "<div class=\"hero\">" in body and not hero_hidden:
+            hero_hidden = True
+            return None
+        return original_markdown(body, *args, **kwargs)
+
+    st.markdown = _patched_markdown  # type: ignore[assignment]
+    try:
+        op_module.main()
+    finally:
+        st.markdown = original_markdown
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def render_clinical_visual_output() -> None:
+    text = str(st.session_state.get("operator_text", "") or "").strip()
+    extraction = st.session_state.get("extraction", {})
+    prediction = st.session_state.get("prediction", {})
+    explanation = st.session_state.get("explanation", {})
+    feature_map = st.session_state.get("feature_map", {})
+
+    has_prediction = isinstance(prediction, dict) and bool(prediction)
+    has_text = bool(text)
+
+    words = len([w for w in text.split() if w.strip()])
+    chars = len(text)
+
+    urg = prediction.get("urgencia", {}) if has_prediction else {}
+    spec = prediction.get("especialidad", {}) if has_prediction else {}
+
+    urg_conf = max(0.0, min(1.0, _safe_float(urg.get("confidence", 0.0))))
+    spec_conf = max(0.0, min(1.0, _safe_float(spec.get("confidence", 0.0))))
+
+    positives = 0
+    negatives = 0
+    vitals_total = 0
+    vitals_reported = 0
+    if isinstance(feature_map, dict) and feature_map:
+        for key, value in feature_map.items():
+            iv = int(_safe_float(value, 0.0))
+            if key.endswith("_presente") and iv == 1:
+                positives += 1
+            if key.endswith("_negado") and iv == 1:
+                negatives += 1
+
+        vital_keys = [
+            "edad",
+            "frecuencia_cardiaca",
+            "presion_sistolica",
+            "presion_diastolica",
+            "saturacion_oxigeno",
+            "frecuencia_respiratoria",
+            "temperatura",
+            "glucemia",
+            "escala_glasgow",
+        ]
+        vitals_total = len(vital_keys)
+        vitals_reported = sum(1 for k in vital_keys if _safe_float(feature_map.get(k, 0.0), 0.0) > 0)
+
+    st.markdown('<div class="u-section"><span class="sec-icon">✦</span> Salida visual de transcripción y LLM</div>', unsafe_allow_html=True)
+
+    c_left, c_right = st.columns([1.05, 1.2], gap="large")
+    with c_left:
+        st.markdown(
+            f"""
+            <div class="v-card">
+                <div class="v-title">Transcripción</div>
+                <div class="v-kpis">
+                    <div><span class="v-k-label">Estado</span><span class="v-k-val">{"Lista" if has_text else "Sin texto"}</span></div>
+                    <div><span class="v-k-label">Palabras</span><span class="v-k-val">{words}</span></div>
+                    <div><span class="v-k-label">Caracteres</span><span class="v-k-val">{chars}</span></div>
+                </div>
+                <div class="v-block">{text[:900] if has_text else 'No hay transcripción todavía. Selecciona audio y pulsa Transcribir.'}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        provider = str(extraction.get("provider", "-") or "-")
+        model = str(extraction.get("model", "-") or "-")
+        fallback = "sí" if bool(extraction.get("fallback_used", False)) else "no"
+        st.markdown(
+            f"""
+            <div class="v-card compact">
+                <div class="v-title">Trazabilidad extracción</div>
+                <div class="trace-row"><span>Proveedor</span><b>{provider}</b></div>
+                <div class="trace-row"><span>Modelo</span><b>{model}</b></div>
+                <div class="trace-row"><span>Fallback</span><b>{fallback}</b></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with c_right:
+        if has_prediction:
+            urg_name = str(urg.get("name", "-") or "-")
+            spec_name = str(spec.get("name", "-") or "-")
+            st.markdown(
+                f"""
+                <div class="v-card">
+                    <div class="v-title">Salida LLM + IA</div>
+                    <div class="pred-head">
+                        <span class="pred-badge">Urgencia: {urg_name}</span>
+                        <span class="pred-badge">Especialidad: {spec_name}</span>
+                    </div>
+                    <div class="bar-wrap"><span>Confianza urgencia</span><div class="bar"><i style="width:{urg_conf * 100:.1f}%"></i></div><b>{urg_conf * 100:.1f}%</b></div>
+                    <div class="bar-wrap"><span>Confianza especialidad</span><div class="bar"><i style="width:{spec_conf * 100:.1f}%"></i></div><b>{spec_conf * 100:.1f}%</b></div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            evidence = explanation.get("evidence", []) if isinstance(explanation, dict) else []
+            cautions = explanation.get("cautions", []) if isinstance(explanation, dict) else []
+            chips = "".join(f"<span class='chip good'>{str(item)}</span>" for item in list(evidence)[:6])
+            warns = "".join(f"<span class='chip warn'>{str(item)}</span>" for item in list(cautions)[:4])
+            st.markdown(
+                f"""
+                <div class="v-card compact">
+                    <div class="v-title">Señales clínicas detectadas</div>
+                    <div class="chip-wrap">{chips if chips else '<span class="chip">Sin evidencias destacadas</span>'}</div>
+                    <div class="v-subtitle">Precauciones</div>
+                    <div class="chip-wrap">{warns if warns else '<span class="chip">Sin alertas de seguridad</span>'}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                """
+                <div class="v-card">
+                    <div class="v-title">Salida LLM + IA</div>
+                    <div class="v-block">Genera vector y predicción para ver aquí la salida visual de urgencia, especialidad, confidencias y señales clínicas.</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        ratio = (vitals_reported / vitals_total) if vitals_total else 0.0
+        st.markdown(
+            f"""
+            <div class="v-card compact">
+                <div class="v-title">Vector clínico</div>
+                <div class="trace-row"><span>Constantes reportadas</span><b>{vitals_reported}/{vitals_total}</b></div>
+                <div class="trace-row"><span>Factores presentes</span><b>{positives}</b></div>
+                <div class="trace-row"><span>Factores negados</span><b>{negatives}</b></div>
+                <div class="bar-wrap"><span>Completitud de constantes</span><div class="bar"><i style="width:{ratio * 100:.1f}%"></i></div><b>{ratio * 100:.1f}%</b></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 @st.cache_resource
 def map_load_graph_with_traffic() -> nx.MultiDiGraph:
@@ -301,185 +481,195 @@ def map_render_driver_map(
   <link rel=\"stylesheet\" href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\" />
   <script src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\"></script>
   <style>
-        html, body, #map {{ height: 100%; width: 100%; margin: 0; padding: 0; background-color: #f4f4f4; overflow: hidden; }}
-        @keyframes pulseRed {{ 0% {{ box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); }} 70% {{ box-shadow: 0 0 0 15px rgba(220, 53, 69, 0); }} 100% {{ box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }} }}
-        @keyframes glowTarget {{ 0% {{ box-shadow: 0 0 5px 2px rgba(52, 152, 219, 0.5); }} 50% {{ box-shadow: 0 0 20px 8px rgba(52, 152, 219, 0.8); }} 100% {{ box-shadow: 0 0 5px 2px rgba(52, 152, 219, 0.5); }} }}
-        .sos-marker {{
-            background-color: #dc3545; border: 2px solid white; border-radius: 50%;
-            color: white; font-weight: 700; font-size: 12px; text-align: center; line-height: 28px;
-            box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); animation: pulseRed 1.4s infinite;
-        }}
-        .ambu-marker {{ background-color: #e8f4f8; border: 2px solid #3498db; border-radius: 5px; text-align: center; line-height: 22px; font-size: 16px; }}
-        .amb-icon {{ font-size: 32px; text-shadow: 2px 2px 5px rgba(0,0,0,0.8); text-align: center; z-index: 1001 !important; }}
-        .hosp-marker {{ background-color: white; border: 3px solid; border-radius: 50%; text-align: center; line-height: 24px; font-size: 16px; box-shadow: 0 3px 6px rgba(0,0,0,0.4); transition: all 0.5s ease; }}
-        .hosp-green {{ border-color: #2ecc71; }}
-        .hosp-orange {{ border-color: #f39c12; }}
-        .hosp-red {{ border-color: #e74c3c; }}
-        .hosp-target {{ border-color: #3498db !important; animation: glowTarget 1.5s infinite; z-index: 900 !important; transform: scale(1.2); }}
-        .custom-tip {{ font-family: Arial, sans-serif; font-size: 13px; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); border: none; text-align: center; }}
-        .traffic-tip {{ background-color: rgba(255,255,255,0.9); font-weight: bold; }}
-        .progress-bg {{ background: #e0e0e0; width: 100%; height: 8px; border-radius: 4px; margin-top: 4px; overflow: hidden; }}
-        .progress-fill {{ height: 100%; border-radius: 4px; transition: width 0.5s ease; }}
-        .hospital-popup {{ min-width: 280px; max-width: 340px; font-family: Arial, sans-serif; }}
-        .hospital-popup .h-title {{ font-size: 14px; font-weight: 700; margin-bottom: 6px; color: #11324d; }}
-        .hospital-popup .h-meta {{ color: #4a6278; font-size: 12px; margin-bottom: 8px; }}
-        .hospital-popup .h-row {{ margin: 6px 0; font-size: 12px; color: #22384a; }}
-        .hospital-popup .h-label {{ font-weight: 700; color: #0f4f81; }}
-        .hospital-popup .h-box {{ margin-top: 6px; padding: 8px; border-radius: 8px; background: #f5f9fd; border: 1px solid #d7e8f6; max-height: 92px; overflow: auto; }}
-        #hud {{
-            position: absolute; top: 14px; right: 14px; z-index: 1200;
-            background: rgba(255,255,255,0.95); border-radius: 10px; padding: 10px 12px;
-            border: 1px solid rgba(0,0,0,0.12); width: 320px; font-family: Arial, sans-serif;
-        }}
-        .row {{ display: flex; justify-content: space-between; margin: 4px 0; font-size: 13px; }}
-        .alerts {{ margin-top: 8px; font-size: 12px; max-height: 90px; overflow: auto; }}
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Rajdhani:wght@600;700&display=swap');
+    html, body, #map {{ height:100%; width:100%; margin:0; padding:0; background:#080e18; overflow:hidden; }}
+    @keyframes pulseRed  {{ 0%,100%{{box-shadow:0 0 0 0 rgba(255,71,87,0.8)}}  60%{{box-shadow:0 0 0 14px rgba(255,71,87,0)}} }}
+    @keyframes glowTarget{{ 0%,100%{{box-shadow:0 0 6px 2px rgba(0,200,255,0.4)}} 50%{{box-shadow:0 0 22px 8px rgba(0,200,255,0.75)}} }}
+    @keyframes pulseLive {{ 0%,100%{{opacity:1}} 50%{{opacity:0.5}} }}
+    .sos-marker {{
+        background:linear-gradient(135deg,#c0001a,#ff2240); border:2px solid rgba(255,255,255,0.9);
+        border-radius:50%; color:white; font-family:'Rajdhani',sans-serif; font-weight:700;
+        font-size:11px; text-align:center; line-height:28px; letter-spacing:0.06em;
+        animation:pulseRed 1.4s infinite;
+    }}
+    .ambu-marker {{ background:#0d1624; border:2px solid #00c8ff; border-radius:6px; text-align:center; line-height:22px; font-size:15px; }}
+    .amb-icon {{ font-size:30px; text-align:center; filter:drop-shadow(0 0 8px rgba(0,200,255,0.9)); z-index:1001 !important; }}
+    .hosp-marker {{ background:#0d1624; border:2px solid; border-radius:8px; text-align:center; line-height:26px; font-size:15px; box-shadow:0 2px 8px rgba(0,0,0,0.6); transition:all 0.4s ease; }}
+    .hosp-green  {{ border-color:#00e896; box-shadow:0 0 8px rgba(0,232,150,0.25); }}
+    .hosp-orange {{ border-color:#f5a623; box-shadow:0 0 8px rgba(245,166,35,0.25); }}
+    .hosp-red    {{ border-color:#ff4757; box-shadow:0 0 8px rgba(255,71,87,0.25); }}
+    .hosp-target {{ border-color:#00c8ff !important; animation:glowTarget 1.5s infinite; z-index:900 !important; transform:scale(1.25); }}
+    .custom-tip {{
+        font-family:'JetBrains Mono',monospace; font-size:12px;
+        border-radius:8px; border:1px solid rgba(0,200,255,0.25) !important;
+        background:#0d1624 !important; color:#d6e8f5 !important;
+        box-shadow:0 4px 16px rgba(0,0,0,0.6), 0 0 12px rgba(0,200,255,0.12);
+    }}
+    .leaflet-tooltip.custom-tip {{ padding:8px 12px; }}
+    .traffic-tip {{ font-weight:700; }}
+    .progress-bg   {{ background:#1a2a3a; width:100%; height:6px; border-radius:3px; margin-top:5px; overflow:hidden; }}
+    .progress-fill {{ height:100%; border-radius:3px; transition:width 0.5s ease; }}
+    .leaflet-popup-content-wrapper {{
+        background:#0d1624 !important; color:#d6e8f5 !important;
+        border:1px solid rgba(0,200,255,0.25) !important; border-radius:12px !important;
+        box-shadow:0 8px 32px rgba(0,0,0,0.7), 0 0 16px rgba(0,200,255,0.10) !important;
+    }}
+    .leaflet-popup-tip {{ background:#0d1624 !important; }}
+    .leaflet-popup-close-button {{ color:#4d6a85 !important; }}
+    .hospital-popup {{ min-width:280px; max-width:340px; font-family:'JetBrains Mono',monospace; }}
+    .h-title {{ font-family:'Rajdhani',sans-serif; font-size:15px; font-weight:700; color:#fff; margin-bottom:6px; }}
+    .h-meta  {{ color:#4d6a85; font-size:11px; margin-bottom:8px; letter-spacing:0.06em; }}
+    .h-row   {{ margin:6px 0; font-size:11px; color:rgba(214,232,245,0.75); }}
+    .h-label {{ font-weight:700; color:#00c8ff; display:block; margin-bottom:2px; }}
+    .h-box   {{ margin-top:4px; padding:8px; border-radius:6px; background:rgba(0,200,255,0.04); border:1px solid rgba(0,200,255,0.12); max-height:80px; overflow:auto; font-size:10px; color:#4d6a85; }}
+    #hud {{
+        position:absolute; top:14px; right:14px; z-index:1200;
+        background:rgba(8,14,24,0.94); border:1px solid rgba(0,200,255,0.22);
+        border-radius:12px; padding:14px 16px; width:300px;
+        font-family:'JetBrains Mono',monospace;
+        box-shadow:0 0 24px rgba(0,200,255,0.12), 0 8px 32px rgba(0,0,0,0.7);
+        backdrop-filter:blur(8px);
+    }}
+    #hud::before {{
+        content:''; position:absolute; inset:0; border-radius:12px;
+        background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,200,255,0.015) 3px,rgba(0,200,255,0.015) 4px);
+        pointer-events:none;
+    }}
+    .hud-title {{
+        font-family:'Rajdhani',sans-serif; font-weight:700; font-size:0.95rem;
+        letter-spacing:0.1em; text-transform:uppercase; color:#fff;
+        margin-bottom:10px; border-bottom:1px solid rgba(0,200,255,0.15); padding-bottom:8px;
+        display:flex; justify-content:space-between; align-items:center;
+    }}
+    .live-badge {{
+        font-size:0.6rem; color:#00e896; border:1px solid rgba(0,232,150,0.35);
+        padding:2px 6px; border-radius:3px; letter-spacing:0.1em;
+        animation:pulseLive 2s infinite;
+    }}
+    .hud-row {{ display:flex; justify-content:space-between; align-items:center; margin:6px 0; font-size:0.72rem; }}
+    .hud-label {{ color:rgba(100,160,200,0.7); letter-spacing:0.08em; text-transform:uppercase; }}
+    .hud-val   {{ color:#00c8ff; font-weight:700; font-size:0.8rem; }}
+    .hud-sep   {{ border:none; border-top:1px solid rgba(0,200,255,0.10); margin:8px 0; }}
+    .alerts-title {{ color:rgba(245,166,35,0.8); font-size:0.65rem; letter-spacing:0.1em; text-transform:uppercase; margin-bottom:4px; }}
+    .alerts {{ font-size:0.68rem; max-height:80px; overflow:auto; color:rgba(214,232,245,0.65); }}
+    .alerts li {{ margin:3px 0; list-style:none; padding-left:0; }}
+    .alerts li::before {{ content:'⚠ '; color:#f5a623; }}
+    #map-attrib {{
+        position:absolute; left:12px; bottom:10px; z-index:1200;
+        font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.04em;
+        color:rgba(214,232,245,0.48); background:rgba(8,14,24,0.52);
+        border:1px solid rgba(0,200,255,0.10); border-radius:6px;
+        padding:3px 8px; pointer-events:none;
+    }}
   </style>
 </head>
 <body>
   <div id=\"hud\">
-        <div class=\"row\"><b>Operador Smart City</b><span>🚑</span></div>
-        <div class=\"row\"><span>Destino</span><b id=\"kDestino\">-</b></div>
-        <div class=\"row\"><span>ETA</span><b id=\"kEta\">-</b></div>
-        <div class=\"row\"><span>Distancia</span><b id=\"kDist\">-</b></div>
-        <div class=\"row\"><span>Bases SAMUR</span><b id=\"kBases\">0</b></div>
-        <div class=\"alerts\"><b>Alertas</b><ul id=\"alerts\"></ul></div>
+    <div class=\"hud-title\">Operador AmbulancIA <span class=\"live-badge\">EN VIVO</span></div>
+    <div class=\"hud-row\"><span class=\"hud-label\">Destino</span><b class=\"hud-val\" id=\"kDestino\">—</b></div>
+    <div class=\"hud-row\"><span class=\"hud-label\">ETA</span><b class=\"hud-val\" id=\"kEta\">—</b></div>
+    <div class=\"hud-row\"><span class=\"hud-label\">Distancia</span><b class=\"hud-val\" id=\"kDist\">—</b></div>
+    <div class=\"hud-row\"><span class=\"hud-label\">Bases SAMUR</span><b class=\"hud-val\" id=\"kBases\">0</b></div>
+    <hr class=\"hud-sep\">
+    <div class=\"alerts-title\">Alertas de tráfico</div>
+    <ul class=\"alerts\" id=\"alerts\"></ul>
   </div>
-  <div id=\"map\"></div>
-
+    <div id=\"map-attrib\">Based on real data</div>
+    <div id=\"map\"></div>
   <script>
     const map = L.map('map', {{ preferCanvas: true }}).setView([40.4168, -3.7038], 12.8);
-    L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_nolabels/{{z}}/{{x}}/{{y}}{{r}}.png').addTo(map);
-
-    const scenario = {scenario_json};
-    const bases = {bases_json};
+    L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_nolabels/{{z}}/{{x}}/{{y}}{{r}}.png', {{ attribution: '© CartoDB' }}).addTo(map);
+    const scenario  = {scenario_json};
+    const bases     = {bases_json};
     const incidents = {incidents_json};
-
     document.getElementById('kBases').textContent = String(bases.length);
-
-    const incidentStyle = {{ alto: '#e74c3c', medio: '#f39c12', bajo: '#3498db' }};
-
+    const incidentColors = {{ alto:'#ff4757', medio:'#f5a623', bajo:'#00c8ff' }};
     incidents.forEach((inc) => {{
-      const color = incidentStyle[inc.nivel] || '#888';
-            L.circle([inc.lat, inc.lon], {{ radius: inc.radio, color, fillColor: color, fillOpacity: 0.12, weight: 1, opacity: 0.25 }})
-                .bindTooltip(`🚥 Tráfico: <b>${{inc.tipo}}</b><br>${{inc.detalle}}`, {{ direction: 'center', className: 'custom-tip traffic-tip' }})
-        .addTo(map);
+        const color = incidentColors[inc.nivel] || '#888';
+        L.circle([inc.lat, inc.lon], {{ radius:inc.radio, color, fillColor:color, fillOpacity:0.10, weight:1, opacity:0.30 }})
+          .bindTooltip(`🚥 <b>${{inc.tipo}}</b><br>${{inc.detalle}}`, {{ direction:'center', className:'custom-tip traffic-tip' }})
+          .addTo(map);
     }});
-
-        const alertsEl = document.getElementById('alerts');
-        (scenario.alerts || []).forEach((a) => {{
-            const li = document.createElement('li');
-            li.textContent = a;
-            alertsEl.appendChild(li);
-        }});
-        if (!alertsEl.children.length) {{
-            const li = document.createElement('li');
-            li.textContent = 'Sin alertas activas';
-            alertsEl.appendChild(li);
-        }};
-
+    const alertsEl = document.getElementById('alerts');
+    if ((scenario.alerts || []).length) {{
+        scenario.alerts.forEach((a) => {{ const li = document.createElement('li'); li.textContent = a; alertsEl.appendChild(li); }});
+    }} else {{
+        const li = document.createElement('li'); li.textContent = '✓ Sin alertas activas';
+        li.style.color = 'rgba(0,232,150,0.7)'; li.style.listStyle = 'none'; alertsEl.appendChild(li);
+    }}
     bases.forEach((b) => {{
-            const icon = L.divIcon({{ className: 'ambu-marker', html: '🩺', iconSize:[26,26], iconAnchor:[13,13] }});
-            L.marker([b.lat, b.lon], {{ icon }}).bindTooltip(`<b>Base SVB</b><br>${{b.nombre}}`, {{ direction: 'top', className: 'custom-tip' }}).addTo(map);
+        const icon = L.divIcon({{ className:'ambu-marker', html:'🩺', iconSize:[26,26], iconAnchor:[13,13] }});
+        L.marker([b.lat, b.lon], {{ icon }}).bindTooltip(`<b style="color:#00c8ff">BASE SVB</b><br>${{b.nombre}}`, {{ direction:'top', className:'custom-tip' }}).addTo(map);
     }});
-
-        const route = scenario.gps_ida || [];
-        const sosIcon = L.divIcon({{ className: 'sos-marker', html: 'SOS', iconSize:[28,28], iconAnchor:[14,14] }});
-        if (route.length) {{
-            L.marker(route[0], {{ icon: sosIcon }}).addTo(map).bindTooltip('<b>Punto operativo</b>', {{ direction: 'top', className: 'custom-tip' }});
+    const route = scenario.gps_ida || [];
+    const sosIcon = L.divIcon({{ className:'sos-marker', html:'SOS', iconSize:[28,28], iconAnchor:[14,14] }});
+    if (route.length) {{
+        L.marker(route[0], {{ icon: sosIcon }}).addTo(map).bindTooltip('<b style="color:#ff4757">PUNTO OPERATIVO</b>', {{ direction:'top', className:'custom-tip' }});
+    }}
+    const hospitalMarkers = {{}};
+    scenario.hospitales.forEach((h) => {{
+        const colorClass = (h.occ > 85 ? 'hosp-red' : (h.occ > 50 ? 'hosp-orange' : 'hosp-green'));
+        const barColor   = h.occ > 85 ? '#ff4757' : (h.occ > 50 ? '#f5a623' : '#00e896');
+        const icon = L.divIcon({{ className:'hosp-marker ' + colorClass, html:'🏥', iconSize:[30,30], iconAnchor:[15,15] }});
+        const tipHTML = `<div style="min-width:180px"><div style="font-family:'Rajdhani',sans-serif;font-size:13px;font-weight:700;color:#fff;margin-bottom:4px;">${{h.nombre}}</div>🛏 Ocupación: <b style="color:${{barColor}}">${{h.occ}}%</b><div class="progress-bg"><div class="progress-fill" style="width:${{h.occ}}%;background:linear-gradient(90deg,${{barColor}},${{barColor}}88);"></div></div><div style="margin-top:5px;">⏱ Espera: <b style="color:#f5a623">${{h.wait}} min</b></div></div>`;
+        const popupHTML = `<div class="hospital-popup"><div class="h-title">🏥 ${{h.nombre}}</div><div class="h-meta">${{h.centro_id}} · ${{h.centro_tipo}} · ${{h.municipio}}</div><div class="h-row"><span class="h-label">Dirección</span>${{h.direccion}}</div><div class="h-row"><span class="h-label">Contacto</span>${{h.telefono}} · ${{h.email}}</div><div class="h-row"><span class="h-label">Médicos disponibles</span><b style="color:#00c8ff">${{h.medicos_disponibles}}</b></div><div class="h-row"><span class="h-label">Estado operativo</span>Ocupación <b style="color:${{barColor}}">${{h.occ}}%</b> · Espera <b style="color:#f5a623">${{h.wait}} min</b></div><div class="progress-bg"><div class="progress-fill" style="width:${{h.occ}}%;background:linear-gradient(90deg,${{barColor}},${{barColor}}88);"></div></div><div class="h-row"><span class="h-label">Perfiles</span><div class="h-box">${{h.perfiles}}</div></div><div class="h-row"><span class="h-label">Especialidades</span><div class="h-box">${{h.especialidades}}</div></div></div>`;
+        const marker = L.marker([h.lat, h.lon], {{ icon }}).addTo(map)
+            .bindTooltip(tipHTML, {{ direction:'top', className:'custom-tip' }})
+            .bindPopup(popupHTML, {{ maxWidth:360 }});
+        hospitalMarkers[h.nombre] = marker;
+    }});
+    function densificar(ruta, maxDist) {{
+        const nueva = [];
+        for (let i = 0; i < ruta.length - 1; i++) {{
+            const p1 = ruta[i], p2 = ruta[i+1];
+            const dist = Math.sqrt(Math.pow(p2[0]-p1[0],2)+Math.pow(p2[1]-p1[1],2));
+            const pasos = Math.max(1, Math.ceil(dist/maxDist));
+            for (let j = 0; j < pasos; j++) {{ nueva.push([p1[0]+(p2[0]-p1[0])*(j/pasos), p1[1]+(p2[1]-p1[1])*(j/pasos)]); }}
         }}
-
-        const hospitalMarkers = {{}};
-        scenario.hospitales.forEach((h) => {{
-            const colorClass = (h.occ > 85 ? 'hosp-red' : (h.occ > 50 ? 'hosp-orange' : 'hosp-green'));
-            const barColor = h.occ > 85 ? '#e74c3c' : (h.occ > 50 ? '#f39c12' : '#2ecc71');
-            const icon = L.divIcon({{ className: 'hosp-marker ' + colorClass, html: '🏥', iconSize:[30,30], iconAnchor:[15,15] }});
-            const tipHTML = `<div style=\"text-align:left;\"><center><b>${{h.nombre}}</b></center><hr style=\"margin:4px 0;\">🛏️ Ocupación: <b>${{h.occ}}%</b><div class=\"progress-bg\"><div class=\"progress-fill\" style=\"width:${{h.occ}}%; background-color:${{barColor}};\"></div></div><div style=\"margin-top:4px;\">⏱️ Espera: <b>${{h.wait}} min</b></div></div>`;
-            const popupHTML = `
-                <div class=\"hospital-popup\">
-                    <div class=\"h-title\">🏥 ${{h.nombre}}</div>
-                    <div class=\"h-meta\">${{h.centro_id}} · ${{h.centro_tipo}} · ${{h.municipio}}</div>
-                    <div class=\"h-row\"><span class=\"h-label\">Dirección:</span><br>${{h.direccion}}</div>
-                    <div class=\"h-row\"><span class=\"h-label\">Contacto:</span> ${{h.telefono}} · ${{h.email}}</div>
-                    <div class=\"h-row\"><span class=\"h-label\">Médicos disponibles:</span> <b>${{h.medicos_disponibles}}</b></div>
-                    <div class=\"h-row\"><span class=\"h-label\">Estado operativo:</span> Ocupación <b>${{h.occ}}%</b> · Espera <b>${{h.wait}} min</b></div>
-                    <div class=\"progress-bg\"><div class=\"progress-fill\" style=\"width:${{h.occ}}%; background-color:${{barColor}};\"></div></div>
-                    <div class=\"h-row\"><span class=\"h-label\">Perfiles:</span><div class=\"h-box\">${{h.perfiles}}</div></div>
-                    <div class=\"h-row\"><span class=\"h-label\">Especialidades:</span><div class=\"h-box\">${{h.especialidades}}</div></div>
-                </div>`;
-            const marker = L.marker([h.lat, h.lon], {{ icon }}).addTo(map)
-                .bindTooltip(tipHTML, {{ direction: 'top', className: 'custom-tip' }})
-                .bindPopup(popupHTML, {{ maxWidth: 360 }});
-            hospitalMarkers[h.nombre] = marker;
-        }});
-
-        function densificar(ruta, maxDist) {{
-            const nueva = [];
-            for (let i = 0; i < ruta.length - 1; i++) {{
-                const p1 = ruta[i], p2 = ruta[i + 1];
-                const dist = Math.sqrt(Math.pow(p2[0] - p1[0], 2) + Math.pow(p2[1] - p1[1], 2));
-                const pasos = Math.max(1, Math.ceil(dist / maxDist));
-                for (let j = 0; j < pasos; j++) {{
-                    nueva.push([p1[0] + (p2[0]-p1[0]) * (j/pasos), p1[1] + (p2[1]-p1[1]) * (j/pasos)]);
-                }}
+        nueva.push(ruta[ruta.length-1]); return nueva;
+    }}
+    function haversineM(a, b) {{
+        const R=6371000, rad=x=>x*Math.PI/180;
+        const dLat=rad(b[0]-a[0]), dLon=rad(b[1]-a[1]);
+        const h=Math.sin(dLat/2)**2+Math.cos(rad(a[0]))*Math.cos(rad(b[0]))*Math.sin(dLon/2)**2;
+        return 2*R*Math.atan2(Math.sqrt(h),Math.sqrt(1-h));
+    }}
+    function remainingDist(idx, ruta) {{ let d=0; for (let k=idx; k<ruta.length-1; k++) d+=haversineM(ruta[k],ruta[k+1]); return d; }}
+    if (route.length >= 2) {{
+        const idaSuave = densificar(route, 0.00018);
+        const routeLine = L.polyline(route, {{ color:'#00c8ff', weight:3, opacity:0.55, dashArray:'6,9' }}).addTo(map);
+        const doneLine  = L.polyline([idaSuave[0]], {{ color:'#00e896', weight:5, opacity:0.9 }}).addTo(map);
+        const ambIcon   = L.divIcon({{ className:'amb-icon', html:'🚑', iconSize:[32,32], iconAnchor:[16,16] }});
+        const amb       = L.marker(idaSuave[0], {{ icon:ambIcon }}).addTo(map);
+        if (hospitalMarkers[scenario.destino.nombre]) {{
+            hospitalMarkers[scenario.destino.nombre].setIcon(L.divIcon({{ className:'hosp-marker hosp-target', html:'🏥🏁', iconSize:[36,36], iconAnchor:[18,18] }}));
+        }}
+        const routeBounds = routeLine.getBounds();
+        if (routeBounds.isValid()) {{
+            map.fitBounds(routeBounds.pad(0.08), {{ maxZoom: 15 }});
+            const diagKm = map.distance(routeBounds.getSouthWest(), routeBounds.getNorthEast()) / 1000;
+            if (diagKm > 45) {{
+                const start = route[0], end = route[route.length - 1];
+                const center = [ (start[0] + end[0]) / 2, (start[1] + end[1]) / 2 ];
+                map.setView(center, 12.5);
             }}
-            nueva.push(ruta[ruta.length - 1]);
-            return nueva;
         }}
-
-        function haversineM(a, b) {{
-            const R = 6371000;
-            const rad = x => x * Math.PI / 180;
-            const dLat = rad(b[0]-a[0]), dLon = rad(b[1]-a[1]);
-            const h = Math.sin(dLat/2)**2 + Math.cos(rad(a[0]))*Math.cos(rad(b[0]))*Math.sin(dLon/2)**2;
-            return 2*R*Math.atan2(Math.sqrt(h), Math.sqrt(1-h));
+        const etaTotal=Math.max(2,Number(scenario.eta_min||8)), pasoAnimacion=4, tickMs=50;
+        let idx=0;
+        function animar() {{
+            if (idx >= idaSuave.length) {{ document.getElementById('kEta').textContent='0 min'; document.getElementById('kDist').textContent='0 m'; return; }}
+            amb.setLatLng(idaSuave[idx]); doneLine.setLatLngs(idaSuave.slice(0,idx+1));
+            const progress=idx/Math.max(1,idaSuave.length-1);
+            const etaNow=Math.max(0,Math.round(etaTotal*(1-progress)));
+            const rem=remainingDist(idx,idaSuave);
+            document.getElementById('kEta').textContent=etaNow+' min';
+            document.getElementById('kDist').textContent=rem>=1000?(rem/1000).toFixed(1)+' km':Math.round(rem)+' m';
+            idx+=pasoAnimacion; setTimeout(animar,tickMs);
         }}
-
-        function remainingDist(idx, ruta) {{
-            let d = 0;
-            for (let k = idx; k < ruta.length - 1; k++) d += haversineM(ruta[k], ruta[k+1]);
-            return d;
-        }}
-
-        if (route.length >= 2) {{
-            const idaSuave = densificar(route, 0.00018);
-            const routeLine = L.polyline(route, {{ color: '#1a73e8', weight: 4, opacity: 0.5, dashArray: '8,10' }}).addTo(map);
-            const doneLine = L.polyline([idaSuave[0]], {{ color: '#19e872', weight: 5, opacity: 0.9 }}).addTo(map);
-            const ambIcon = L.divIcon({{ className: 'amb-icon', html: '🚑', iconSize:[32,32], iconAnchor:[16,16] }});
-            const amb = L.marker(idaSuave[0], {{ icon: ambIcon }}).addTo(map);
-
-            if (hospitalMarkers[scenario.destino.nombre]) {{
-                hospitalMarkers[scenario.destino.nombre].setIcon(
-                    L.divIcon({{ className: 'hosp-marker hosp-target', html: '🏥🏁', iconSize:[36,36], iconAnchor:[18,18] }})
-                );
-            }}
-
-            map.fitBounds(routeLine.getBounds().pad(0.2));
-
-            const etaTotal = Math.max(2, Number(scenario.eta_min || 8));
-            const pasoAnimacion = 4;
-            const tickMs = 50;
-            let idx = 0;
-            function animar() {{
-                if (idx >= idaSuave.length) {{
-                    document.getElementById('kEta').textContent = '0 min';
-                    document.getElementById('kDist').textContent = '0 m';
-                    return;
-                }}
-                amb.setLatLng(idaSuave[idx]);
-                doneLine.setLatLngs(idaSuave.slice(0, idx + 1));
-                const progress = idx / Math.max(1, idaSuave.length - 1);
-                const etaNow = Math.max(0, Math.round(etaTotal * (1 - progress)));
-                const rem = remainingDist(idx, idaSuave);
-                document.getElementById('kEta').textContent = etaNow + ' min';
-                document.getElementById('kDist').textContent = rem >= 1000 ? (rem / 1000).toFixed(1) + ' km' : Math.round(rem) + ' m';
-                idx += pasoAnimacion;
-                setTimeout(animar, tickMs);
-            }}
-            setTimeout(animar, 120);
-        }}
-
-        document.getElementById('kDestino').textContent = scenario.destino.nombre || '-';
-        document.getElementById('kEta').textContent = `${{scenario.eta_min}} min`;
+        setTimeout(animar,120);
+    }}
+    document.getElementById('kDestino').textContent = scenario.destino.nombre || '—';
+    document.getElementById('kEta').textContent     = `${{scenario.eta_min}} min`;
   </script>
 </body>
 </html>
@@ -515,100 +705,654 @@ def map_render_fallback_map(scenario: Dict[str, Any], bases: List[Dict[str, Any]
 
 
 def main() -> None:
+    # ── PAGE CONFIG ──────────────────────────────────────────────────────────
+    st.set_page_config(
+        page_title="AmbulancIA · Operador",
+        layout="wide",
+        initial_sidebar_state="collapsed",
+    )
+
+    # ── GLOBAL STYLES ────────────────────────────────────────────────────────
     st.markdown(
         """
         <style>
+            @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600&display=swap');
+
+            :root {
+                --bg-base:    #080e18;
+                --bg-card:    #0d1624;
+                --bg-card2:   #111c2e;
+                --border:     rgba(0, 200, 255, 0.10);
+                --border-hot: rgba(0, 200, 255, 0.30);
+                --cyan:       #00c8ff;
+                --amber:      #f5a623;
+                --green:      #00e896;
+                --red:        #ff4757;
+                --text:       #d6e8f5;
+                --muted:      #4d6a85;
+                --glow-cyan:  0 0 18px rgba(0,200,255,0.22);
+            }
+
+            html, body, [data-testid="stAppViewContainer"] {
+                background-color: var(--bg-base) !important;
+                color: var(--text) !important;
+            }
+            [data-testid="stAppViewContainer"]::before {
+                content: '';
+                position: fixed; inset: 0;
+                background:
+                    radial-gradient(ellipse 65% 45% at 5%   0%,  rgba(0,200,255,0.07) 0%, transparent 55%),
+                    radial-gradient(ellipse 50% 40% at 95% 100%, rgba(0,232,150,0.04) 0%, transparent 50%),
+                    radial-gradient(ellipse 40% 35% at 50%  50%, rgba(10,30,60,0.5)   0%, transparent 70%);
+                pointer-events: none; z-index: 0;
+            }
+            #MainMenu, header, footer { visibility: hidden; }
+            .block-container {
+                padding-top: 0.8rem !important;
+                padding-bottom: 1.5rem !important;
+                padding-left: 1.4rem !important;
+                padding-right: 1.4rem !important;
+                max-width: 100% !important;
+                position: relative; z-index: 1;
+            }
+
+            /* ── HERO ── */
             .u-hero {
-                margin-top: 0.2rem;
-                margin-bottom: 0.9rem;
+                margin: 0 0 16px 0;
                 border-radius: 16px;
-                padding: 16px 18px;
-                background: linear-gradient(130deg, #005b8f 0%, #0a8fb5 48%, #00a37d 100%);
-                color: white;
-                box-shadow: 0 10px 24px rgba(12, 86, 128, 0.24);
+                padding: 22px 28px;
+                background: linear-gradient(118deg, #070f1d 0%, #0b1f3a 45%, #061a15 100%);
+                border: 1px solid var(--border-hot);
+                box-shadow: var(--glow-cyan), inset 0 1px 0 rgba(0,200,255,0.08);
+                position: relative; overflow: hidden;
             }
-            .u-hero h2 { margin: 0; font-size: 1.4rem; }
-            .u-hero p { margin: 6px 0 0; opacity: 0.93; }
-            .u-note {
-                margin: 0 0 12px 0;
-                padding: 12px 14px;
-                border-radius: 14px;
-                background: rgba(255,255,255,0.86);
-                border: 1px solid rgba(0, 91, 143, 0.12);
-                color: #173147;
-                box-shadow: 0 10px 22px rgba(12, 86, 128, 0.06);
-                line-height: 1.55;
+            .u-hero::before {
+                content: 'OPERADOR';
+                position: absolute; right: 28px; top: 50%;
+                transform: translateY(-50%);
+                font-family: 'Rajdhani', sans-serif;
+                font-size: 5.5rem; font-weight: 700;
+                color: rgba(0,200,255,0.035);
+                letter-spacing: 0.18em;
+                pointer-events: none; user-select: none;
+                white-space: nowrap;
             }
-            .u-note strong {
-                color: #0a6fb8;
+            .u-hero h2 {
+                margin: 0;
+                font-family: 'Rajdhani', sans-serif;
+                font-size: 2rem; font-weight: 700;
+                letter-spacing: 0.07em; text-transform: uppercase;
+                color: #fff; line-height: 1.1;
             }
+            .u-hero h2 span { color: var(--cyan); }
+            .u-hero p {
+                margin: 7px 0 0;
+                font-family: 'DM Sans', sans-serif;
+                font-size: 0.9rem; color: var(--muted);
+                letter-spacing: 0.02em;
+                max-width: 74ch;
+            }
+            .live-dot {
+                display: inline-block; width: 8px; height: 8px;
+                border-radius: 50%; background: var(--green);
+                margin-right: 6px; vertical-align: middle;
+                animation: pulseDot 1.6s ease-in-out infinite;
+            }
+            @keyframes pulseDot {
+                0%,100% { opacity:1; box-shadow:0 0 0 0 rgba(0,232,150,0.6); }
+                50%      { opacity:0.7; box-shadow:0 0 0 6px rgba(0,232,150,0); }
+            }
+            .hero-badge {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                margin-top: 12px;
+                padding: 4px 10px;
+                border-radius: 999px;
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 0.66rem;
+                letter-spacing: 0.1em;
+                text-transform: uppercase;
+                color: var(--green);
+                border: 1px solid rgba(0,232,150,0.3);
+                background: rgba(0,232,150,0.08);
+            }
+
+            .stTabs [data-baseweb="tab-list"] {
+                gap: 8px;
+                background: rgba(8,14,24,0.7);
+                border: 1px solid var(--border);
+                border-radius: 11px;
+                padding: 6px;
+            }
+            .stTabs [data-baseweb="tab"] {
+                border-radius: 8px;
+                color: var(--muted);
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 0.7rem;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                border: 1px solid transparent;
+            }
+            .stTabs [aria-selected="true"] {
+                background: rgba(0,200,255,0.10) !important;
+                color: var(--cyan) !important;
+                border-color: rgba(0,200,255,0.28) !important;
+            }
+
+            /* ── SECTION HEADERS ── */
             .u-section {
-                font-size: 1.02rem;
-                font-weight: 700;
-                color: #113c67;
-                margin: 0.7rem 0 0.45rem;
+                font-family: 'Rajdhani', sans-serif;
+                font-size: 0.68rem; font-weight: 700;
+                color: var(--muted);
+                letter-spacing: 0.22em; text-transform: uppercase;
+                margin: 1.4rem 0 0.7rem 0;
+                display: flex; align-items: center; gap: 10px;
             }
+            .u-section .sec-icon {
+                color: var(--cyan); font-size: 0.8rem; opacity: 0.8;
+            }
+            .u-section::after {
+                content: ''; flex: 1;
+                height: 1px;
+                background: linear-gradient(90deg, var(--border-hot), transparent);
+            }
+
+            .v-card {
+                background: linear-gradient(165deg, rgba(13,22,36,0.95), rgba(17,28,46,0.95));
+                border: 1px solid var(--border);
+                border-radius: 13px;
+                padding: 12px 14px;
+                box-shadow: 0 10px 24px rgba(0,0,0,0.30);
+                margin-bottom: 10px;
+            }
+            .v-card.compact { padding: 10px 12px; }
+            .v-title {
+                font-family: 'Rajdhani', sans-serif;
+                font-size: 0.95rem;
+                color: #fff;
+                letter-spacing: 0.06em;
+                text-transform: uppercase;
+                margin-bottom: 8px;
+            }
+            .v-subtitle {
+                margin: 8px 0 5px;
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 0.63rem;
+                color: var(--muted);
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+            }
+            .v-kpis {
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 8px;
+                margin-bottom: 8px;
+            }
+            .v-kpis > div {
+                background: rgba(0,200,255,0.06);
+                border: 1px solid rgba(0,200,255,0.16);
+                border-radius: 8px;
+                padding: 7px 8px;
+            }
+            .v-k-label {
+                display: block;
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 0.62rem;
+                color: var(--muted);
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+            }
+            .v-k-val {
+                display: block;
+                font-family: 'Rajdhani', sans-serif;
+                font-size: 1rem;
+                color: var(--cyan);
+                font-weight: 700;
+                margin-top: 2px;
+            }
+            .v-block {
+                border: 1px solid rgba(0,200,255,0.16);
+                border-radius: 9px;
+                background: rgba(0,200,255,0.04);
+                color: rgba(214,232,245,0.9);
+                padding: 10px 11px;
+                min-height: 85px;
+                max-height: 180px;
+                overflow: auto;
+                font-size: 0.82rem;
+                line-height: 1.45;
+                white-space: pre-wrap;
+            }
+            .pred-head {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+                margin-bottom: 8px;
+            }
+            .pred-badge {
+                display: inline-flex;
+                align-items: center;
+                border-radius: 999px;
+                padding: 4px 9px;
+                font-size: 0.72rem;
+                color: var(--cyan);
+                border: 1px solid rgba(0,200,255,0.2);
+                background: rgba(0,200,255,0.08);
+            }
+            .bar-wrap {
+                display: grid;
+                grid-template-columns: 1fr auto;
+                gap: 7px 10px;
+                align-items: center;
+                margin-top: 7px;
+            }
+            .bar-wrap > span {
+                grid-column: 1 / -1;
+                font-size: 0.74rem;
+                color: var(--muted);
+            }
+            .bar-wrap > b {
+                color: var(--cyan);
+                font-size: 0.78rem;
+                font-family: 'JetBrains Mono', monospace;
+            }
+            .bar {
+                height: 8px;
+                border-radius: 999px;
+                background: rgba(255,255,255,0.06);
+                overflow: hidden;
+                border: 1px solid rgba(0,200,255,0.14);
+            }
+            .bar i {
+                display: block;
+                height: 100%;
+                background: linear-gradient(90deg, rgba(0,200,255,0.65), rgba(0,232,150,0.75));
+            }
+            .trace-row {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin: 4px 0;
+                font-size: 0.78rem;
+                color: rgba(214,232,245,0.84);
+            }
+            .trace-row b {
+                color: var(--cyan);
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 0.76rem;
+            }
+            .chip-wrap {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+            }
+            .chip {
+                display: inline-flex;
+                align-items: center;
+                border-radius: 999px;
+                padding: 3px 8px;
+                font-size: 0.7rem;
+                color: rgba(214,232,245,0.88);
+                border: 1px solid rgba(0,200,255,0.2);
+                background: rgba(0,200,255,0.08);
+            }
+            .chip.good {
+                border-color: rgba(0,232,150,0.25);
+                background: rgba(0,232,150,0.08);
+            }
+            .chip.warn {
+                border-color: rgba(245,166,35,0.32);
+                background: rgba(245,166,35,0.10);
+            }
+
+            /* ── METRIC CARDS (custom HTML, not st.metric) ── */
+            .metric-strip {
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 10px;
+                margin: 0 0 4px 0;
+            }
+            .metric-card {
+                background: var(--bg-card);
+                border: 1px solid var(--border);
+                border-radius: 12px;
+                padding: 16px 18px;
+                position: relative; overflow: hidden;
+                animation: fadeSlideUp 0.4s ease both;
+                transition: border-color 0.25s, box-shadow 0.25s;
+                cursor: default;
+            }
+            .metric-card::before {
+                content: '';
+                position: absolute; top: 0; left: 0; right: 0; height: 2px;
+                background: var(--accent-color, var(--cyan));
+                opacity: 0.6;
+            }
+            .metric-card:hover {
+                border-color: var(--border-hot);
+                box-shadow: var(--glow-cyan);
+            }
+            .metric-card .mc-icon {
+                font-size: 1.4rem; margin-bottom: 10px; display: block;
+                filter: drop-shadow(0 0 6px rgba(0,200,255,0.5));
+            }
+            .metric-card .mc-label {
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 0.62rem; color: var(--muted);
+                letter-spacing: 0.14em; text-transform: uppercase;
+                margin-bottom: 6px; display: block;
+            }
+            .metric-card .mc-value {
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 1.9rem; font-weight: 700;
+                color: var(--accent-color, var(--cyan));
+                line-height: 1; display: block;
+            }
+            .metric-card .mc-sub {
+                font-family: 'DM Sans', sans-serif;
+                font-size: 0.72rem; color: var(--muted);
+                margin-top: 5px; display: block;
+            }
+            @keyframes fadeSlideUp {
+                from { opacity:0; transform:translateY(10px); }
+                to   { opacity:1; transform:translateY(0); }
+            }
+
+            /* ── STATUS BAR ── */
+            .status-bar {
+                display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+                background: var(--bg-card);
+                border: 1px solid var(--border);
+                border-radius: 10px;
+                padding: 10px 16px;
+                margin: 0 0 14px 0;
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 0.7rem;
+                animation: fadeSlideUp 0.45s ease 0.1s both;
+            }
+            .status-bar .sb-label { color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; }
+            .status-bar .sb-val   { color: var(--cyan); font-weight: 700; }
+            .status-bar .sb-sep   {
+                width: 1px; height: 14px;
+                background: var(--border); flex-shrink: 0;
+            }
+            .status-bar .sb-pill  {
+                padding: 3px 9px; border-radius: 4px;
+                border: 1px solid rgba(0,200,255,0.20);
+                background: rgba(0,200,255,0.06);
+                color: var(--cyan); letter-spacing: 0.08em;
+            }
+            .status-bar .sb-pill--green {
+                border-color: rgba(0,232,150,0.25);
+                background: rgba(0,232,150,0.06);
+                color: var(--green);
+            }
+            .status-bar .sb-pill--amber {
+                border-color: rgba(245,166,35,0.25);
+                background: rgba(245,166,35,0.06);
+                color: var(--amber);
+            }
+
+            /* ── INCIDENT CARDS ── */
+            .incident-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+                gap: 10px;
+                margin: 0 0 4px 0;
+            }
+            .incident-card {
+                background: var(--bg-card);
+                border: 1px solid var(--border);
+                border-radius: 10px;
+                padding: 14px 16px;
+                position: relative; overflow: hidden;
+                animation: fadeSlideUp 0.4s ease both;
+                transition: border-color 0.2s, box-shadow 0.2s;
+            }
+            .incident-card::before {
+                content: '';
+                position: absolute; top: 0; left: 0; bottom: 0; width: 3px;
+                background: var(--inc-color, var(--amber));
+            }
+            .incident-card:hover {
+                border-color: var(--inc-color, var(--amber));
+                box-shadow: 0 0 14px rgba(245,166,35,0.12);
+            }
+            .incident-card .ic-type {
+                font-family: 'Rajdhani', sans-serif;
+                font-size: 0.95rem; font-weight: 700;
+                color: #fff; letter-spacing: 0.04em;
+                margin-bottom: 4px;
+            }
+            .incident-card .ic-detail {
+                font-family: 'DM Sans', sans-serif;
+                font-size: 0.78rem; color: var(--muted);
+                margin-bottom: 8px;
+            }
+            .incident-card .ic-badge {
+                display: inline-block;
+                padding: 2px 8px; border-radius: 3px;
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase;
+                background: rgba(0,0,0,0.3);
+                border: 1px solid var(--inc-color, var(--amber));
+                color: var(--inc-color, var(--amber));
+            }
+            .incident-card .ic-radio {
+                float: right;
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 0.65rem; color: var(--muted);
+                margin-top: -22px;
+            }
+
+            /* ── st.metric OVERRIDE (fallback) ── */
+            [data-testid="metric-container"] {
+                background: var(--bg-card) !important;
+                border: 1px solid var(--border) !important;
+                border-radius: 10px !important;
+                padding: 14px 16px !important;
+            }
+            [data-testid="stMetricLabel"] {
+                font-family: 'JetBrains Mono', monospace !important;
+                font-size: 0.63rem !important; color: var(--muted) !important;
+                letter-spacing: 0.12em !important; text-transform: uppercase !important;
+            }
+            [data-testid="stMetricValue"] {
+                font-family: 'JetBrains Mono', monospace !important;
+                font-size: 1.6rem !important; font-weight: 700 !important;
+                color: var(--cyan) !important;
+            }
+
+            /* ── DATAFRAME ── */
+            [data-testid="stDataFrame"] {
+                border: 1px solid var(--border) !important;
+                border-radius: 10px !important; overflow: hidden;
+            }
+            [data-testid="stDataFrame"] thead th {
+                background: var(--bg-card2) !important;
+                color: var(--muted) !important;
+                font-family: 'JetBrains Mono', monospace !important;
+                font-size: 0.68rem !important; letter-spacing: 0.1em !important;
+                text-transform: uppercase !important;
+            }
+            [data-testid="stDataFrame"] tbody td {
+                background: var(--bg-card) !important; color: var(--text) !important;
+                font-family: 'JetBrains Mono', monospace !important; font-size: 0.78rem !important;
+                border-color: var(--border) !important;
+            }
+
+            /* ── ALERTS / ERRORS / EXPANDERS ── */
+            [data-testid="stAlert"] {
+                background: rgba(255,71,87,0.07) !important;
+                border: 1px solid rgba(255,71,87,0.25) !important;
+                border-radius: 8px !important; color: #ff8a96 !important;
+                font-family: 'DM Sans', sans-serif !important;
+            }
+            [data-testid="stExpander"] {
+                background: var(--bg-card) !important;
+                border: 1px solid var(--border) !important;
+                border-radius: 10px !important;
+            }
+            hr { border-color: var(--border) !important; }
+
+            /* ── MAP WRAP ── */
+            .map-wrap {
+                margin-top: 12px; padding: 4px;
+                background: var(--bg-card);
+                border: 1px solid var(--border-hot);
+                border-radius: 16px;
+                box-shadow: var(--glow-cyan), 0 24px 60px rgba(0,0,0,0.5);
+            }
+            iframe { height: 780px !important; border-radius: 13px !important; display: block; }
         </style>
-        <div class="u-hero">
-            <h2>Panel Operador MPAA Unificado</h2>
-            <p>Gestión clínica y monitorización operativa en tiempo real.</p>
-        </div>
         """,
         unsafe_allow_html=True,
     )
 
+    # ── HERO ─────────────────────────────────────────────────────────────────
     st.markdown(
         """
-        <div class="u-note">
-            <strong>Flujo de trabajo:</strong> primero se resuelve la evaluación clínica, después se consolida la derivación y finalmente se sincroniza la ruta con el mapa operativo.
+        <div class="u-hero">
+            <h2>Panel Operador <span>MPAA</span> Unificado</h2>
+            <p>Gestión clínica · Derivación inteligente · Monitorización operativa en tiempo real · Madrid</p>
+            <div class="hero-badge"><span class="live-dot"></span>Operación en vivo</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown("---")
-    op.main()
+    tab_clinica, tab_operacion, tab_mapa = st.tabs([
+        "Consola clínica",
+        "Coordinación operativa",
+        "Mapa y navegación",
+    ])
 
-    incidents = map_get_scenario_incidents()
-    st.markdown('<div class="u-section">Incidencias activas</div>', unsafe_allow_html=True)
-    st.dataframe(pd.DataFrame(incidents), use_container_width=True)
+    # ── CLINICAL EVALUATION ──────────────────────────────────────────────────
+    with tab_clinica:
+        st.markdown('<div class="u-section"><span class="sec-icon">⬡</span> Evaluación clínica</div>', unsafe_allow_html=True)
+        op_module = load_operator_service_embedded()
+        render_operator_service_embedded(op_module)
 
-    st.markdown("---")
-    st.markdown('<div class="u-section">Mapa operativo</div>', unsafe_allow_html=True)
-
-    graph = map_load_graph_with_traffic()
+    # ── LOAD DATA ─────────────────────────────────────────────────────────────
+    graph        = map_load_graph_with_traffic()
     hospitals_df = map_load_hospitals(graph)
-    bases = map_load_samur_bases(graph)
+    bases        = map_load_samur_bases(graph)
+    incidents    = map_get_scenario_incidents()
 
     if hospitals_df.empty:
-        st.error("No se pudieron cargar hospitales con coordenadas validas para el mapa.")
+        st.error("No se pudieron cargar hospitales con coordenadas válidas.")
         return
-
     if not bases:
-        st.error("No se pudieron cargar bases SAMUR validas para el mapa.")
+        st.error("No se pudieron cargar bases SAMUR válidas.")
         return
 
     shared_state = load_state()
-    scenario = map_build_operational_scenario(graph, hospitals_df, bases, shared_state)
+    scenario     = map_build_operational_scenario(graph, hospitals_df, bases, shared_state)
 
-    metric_a, metric_b, metric_c = st.columns(3)
-    with metric_a:
-        st.metric(
-            "Hospitales disponibles",
-            int(hospitals_df["centro_id"].nunique()) if "centro_id" in hospitals_df.columns else len(hospitals_df),
+    n_hospitales = int(hospitals_df["centro_id"].nunique()) if "centro_id" in hospitals_df.columns else len(hospitals_df)
+    n_bases      = len(bases)
+    n_incidents  = len(incidents)
+    destino_nombre = scenario["destino"].get("nombre", "—")
+    eta_val        = scenario.get("eta_min", "—")
+    status_text    = scenario.get("status", "—")
+
+    with tab_operacion:
+        st.markdown('<div class="u-section"><span class="sec-icon">◈</span> Coordinación operativa</div>', unsafe_allow_html=True)
+        st.markdown(
+            f"""
+            <div class="status-bar">
+                <span class="sb-label">Destino activo</span>
+                <span class="sb-val">{destino_nombre[:40]}</span>
+                <span class="sb-sep"></span>
+                <span class="sb-label">ETA estimado</span>
+                <span class="sb-val">{eta_val} min</span>
+                <span class="sb-sep"></span>
+                <span class="sb-pill sb-pill--green"><span class="live-dot" style="width:6px;height:6px;margin-right:4px;"></span>SYNC ACTIVO</span>
+                <span class="sb-pill sb-pill--amber">⚠ {n_incidents} INCIDENCIAS</span>
+                <span class="sb-pill">{status_text[:45]}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-    with metric_b:
-        st.metric("Bases SAMUR", len(bases))
-    with metric_c:
-        st.metric("Incidencias activas", len(incidents))
 
-    map_render_driver_map(
-        scenario=scenario,
-        bases=bases,
-        incidents=incidents,
-        hospitals_count=int(hospitals_df["centro_id"].nunique()) if "centro_id" in hospitals_df.columns else len(hospitals_df),
-    )
-    map_render_fallback_map(scenario=scenario, bases=bases)
+        st.markdown(
+            f"""
+            <div class="metric-strip">
+                <div class="metric-card" style="--accent-color:var(--cyan); animation-delay:0.05s">
+                    <span class="mc-icon">🏥</span>
+                    <span class="mc-label">Hospitales disponibles</span>
+                    <span class="mc-value">{n_hospitales}</span>
+                    <span class="mc-sub">centros activos en red</span>
+                </div>
+                <div class="metric-card" style="--accent-color:var(--green); animation-delay:0.10s">
+                    <span class="mc-icon">🚑</span>
+                    <span class="mc-label">Bases SAMUR</span>
+                    <span class="mc-value">{n_bases}</span>
+                    <span class="mc-sub">bases operativas Madrid</span>
+                </div>
+                <div class="metric-card" style="--accent-color:var(--amber); animation-delay:0.15s">
+                    <span class="mc-icon">⚠</span>
+                    <span class="mc-label">Incidencias activas</span>
+                    <span class="mc-value">{n_incidents}</span>
+                    <span class="mc-sub">alertas de tráfico vigentes</span>
+                </div>
+                <div class="metric-card" style="--accent-color:var(--cyan); animation-delay:0.20s">
+                    <span class="mc-icon">⏱</span>
+                    <span class="mc-label">ETA al destino</span>
+                    <span class="mc-value">{eta_val}</span>
+                    <span class="mc-sub">minutos estimados</span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown('<div class="u-section"><span class="sec-icon">▲</span> Incidencias activas</div>', unsafe_allow_html=True)
+        inc_color_map = {"alto": "#ff4757", "medio": "#f5a623", "bajo": "#00c8ff"}
+        inc_icon_map = {"alto": "🔴", "medio": "🟡", "bajo": "🔵"}
+        cards_html = '<div class="incident-grid">'
+        for i, inc in enumerate(incidents):
+            color = inc_color_map.get(inc["nivel"], "#4d6a85")
+            icon = inc_icon_map.get(inc["nivel"], "⚪")
+            delay = 0.05 + i * 0.06
+            cards_html += f"""
+                <div class="incident-card" style="--inc-color:{color}; animation-delay:{delay}s">
+                    <div class="ic-type">{icon} {inc['tipo']}</div>
+                    <div class="ic-detail">{inc['detalle']}</div>
+                    <span class="ic-badge">{inc['nivel']}</span>
+                    <span class="ic-radio">r={inc['radio']}m</span>
+                </div>"""
+        cards_html += '</div>'
+        st.markdown(cards_html, unsafe_allow_html=True)
+
+        st.markdown('<div class="u-section"><span class="sec-icon">▣</span> Top hospitales sugeridos</div>', unsafe_allow_html=True)
+        ranking_df = pd.DataFrame(scenario.get("hospitales", []))
+        if not ranking_df.empty:
+            view_cols = [
+                "nombre",
+                "municipio",
+                "centro_tipo",
+                "medicos_disponibles",
+                "occ",
+                "wait",
+            ]
+            keep = [col for col in view_cols if col in ranking_df.columns]
+            ranking_df = ranking_df.sort_values(["occ", "wait", "medicos_disponibles"], ascending=[True, True, False])
+            st.dataframe(ranking_df[keep].head(12), use_container_width=True, hide_index=True)
+
+    with tab_mapa:
+        st.markdown('<div class="u-section"><span class="sec-icon">◉</span> Mapa operativo</div>', unsafe_allow_html=True)
+        st.markdown('<div class="map-wrap">', unsafe_allow_html=True)
+        map_render_driver_map(
+            scenario=scenario,
+            bases=bases,
+            incidents=incidents,
+            hospitals_count=n_hospitales,
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        map_render_fallback_map(scenario=scenario, bases=bases)
 
 
 if __name__ == "__main__":

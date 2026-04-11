@@ -19,182 +19,284 @@ GRAPH_PATH = BASE_DIR / "madrid_grafo.graphml"
 HOSPITALES_PATH = BASE_DIR / "hospitales_madrid_nodos.csv"
 PROCESSED_HOSPITALES_PATH = BASE_DIR.parent / "analisis_datos" / "data" / "processed" / "centros_servicios_establecimientos_sanitarios_limpio.csv"
 
-st.set_page_config(page_title="AmbulancIA Conductor", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="AmbulancIA · Conductor", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Barlow:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&family=DM+Sans:wght@400;500;600&display=swap');
+
         :root {
-            --ink: #10263f;
-            --muted: #5f7287;
-            --brand: #0a6fb8;
-            --brand-2: #0fb38b;
-            --card: rgba(255,255,255,0.92);
-            --line: rgba(14, 48, 78, 0.12);
-            --shadow: 0 16px 40px rgba(8, 30, 52, 0.14);
+            --bg-base:    #080e18;
+            --bg-card:    #0d1624;
+            --bg-card2:   #111c2e;
+            --border:     rgba(0, 200, 255, 0.10);
+            --border-hot: rgba(0, 200, 255, 0.32);
+            --cyan:       #00c8ff;
+            --amber:      #f5a623;
+            --green:      #00e896;
+            --red:        #ff4757;
+            --text:       #d6e8f5;
+            --muted:      #4d6a85;
+            --glow-cyan:  0 0 18px rgba(0, 200, 255, 0.25);
+            --glow-amber: 0 0 18px rgba(245, 166, 35, 0.30);
         }
-        html, body {
+
+        html, body, [data-testid="stAppViewContainer"] {
+            background-color: var(--bg-base) !important;
+            color: var(--text) !important;
+        }
+        [data-testid="stAppViewContainer"]::before {
+            content: '';
+            position: fixed;
+            inset: 0;
             background:
-                radial-gradient(circle at 15% 10%, rgba(15, 179, 139, 0.12), transparent 28%),
-                radial-gradient(circle at 85% 16%, rgba(10, 111, 184, 0.14), transparent 30%),
-                linear-gradient(180deg, #f4f8fc 0%, #eef4f9 100%);
-            transition: opacity 180ms ease, filter 180ms ease;
+                radial-gradient(ellipse 70% 50% at 10% 0%,   rgba(0,200,255,0.07) 0%, transparent 60%),
+                radial-gradient(ellipse 55% 45% at 90% 100%, rgba(0,232,150,0.05) 0%, transparent 55%);
+            pointer-events: none;
+            z-index: 0;
         }
-        body.conductor-soft-sync {
-            opacity: 0.92;
-            filter: saturate(0.96);
-        }
-        #MainMenu {visibility: hidden;}
-        header {visibility: hidden;}
-        footer {visibility: hidden;}
+        #MainMenu, header, footer { visibility: hidden; }
         .block-container {
-            padding-top: 0.6rem !important;
+            padding-top: 0.8rem !important;
             padding-bottom: 0.5rem !important;
-            padding-left: 1rem !important;
-            padding-right: 1rem !important;
+            padding-left: 1.2rem !important;
+            padding-right: 1.2rem !important;
             max-width: 100% !important;
+            position: relative;
+            z-index: 1;
         }
+
+        /* ── HERO ── */
         .hero-shell {
-            border-radius: 22px;
-            padding: 18px 20px;
-            margin: 0 0 14px 0;
-            background: linear-gradient(135deg, rgba(8, 89, 142, 0.98), rgba(10, 111, 184, 0.92) 50%, rgba(15, 179, 139, 0.92));
-            color: white;
-            box-shadow: 0 16px 34px rgba(8, 64, 102, 0.24);
+            border-radius: 16px;
+            padding: 20px 24px;
+            margin: 0 0 16px 0;
+            background: linear-gradient(120deg, #0a1929 0%, #0d2140 50%, #091d1a 100%);
+            border: 1px solid var(--border-hot);
+            box-shadow: var(--glow-cyan), inset 0 1px 0 rgba(0,200,255,0.08);
+            position: relative;
+            overflow: hidden;
+        }
+        .hero-shell::before {
+            content: 'CONDUCTOR';
+            position: absolute;
+            right: 24px; top: 50%;
+            transform: translateY(-50%);
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 5rem;
+            font-weight: 700;
+            color: rgba(0, 200, 255, 0.04);
+            letter-spacing: 0.15em;
+            pointer-events: none;
+            user-select: none;
         }
         .hero-shell h1 {
             margin: 0;
-            font-family: 'Barlow', sans-serif;
-            font-size: 1.85rem;
-            letter-spacing: 0.2px;
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 1.9rem;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            color: #fff;
+            text-transform: uppercase;
         }
+        .hero-shell h1 span { color: var(--cyan); }
         .hero-shell p {
             margin: 6px 0 0;
-            opacity: 0.94;
-            font-family: 'Inter', sans-serif;
+            font-family: 'DM Sans', sans-serif;
+            font-size: 0.88rem;
+            color: var(--muted);
+            letter-spacing: 0.02em;
+        }
+        .live-dot {
+            display: inline-block;
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--green);
+            margin-right: 6px;
+            animation: pulseDot 1.6s ease-in-out infinite;
+            vertical-align: middle;
+        }
+        @keyframes pulseDot {
+            0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(0,232,150,0.6); }
+            50%       { opacity: 0.7; box-shadow: 0 0 0 6px rgba(0,232,150,0); }
+        }
+        .status-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 4px 10px;
+            border-radius: 4px;
+            background: rgba(0, 200, 255, 0.08);
+            border: 1px solid rgba(0, 200, 255, 0.22);
+            color: var(--cyan);
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 500;
+            font-size: 0.72rem;
+            letter-spacing: 0.08em;
+            margin-right: 8px;
+            margin-top: 12px;
+            text-transform: uppercase;
+        }
+
+        /* ── STATUS CARDS ── */
+        .state-strip {
+            margin-top: 0;
+            padding: 16px;
+            border-radius: 14px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+        }
+        .panel-title {
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: var(--muted);
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            margin: 0 0 12px 0;
         }
         .status-card {
-            background: var(--card);
-            border: 1px solid var(--line);
-            border-radius: 18px;
-            padding: 12px 14px;
-            box-shadow: var(--shadow);
-            backdrop-filter: blur(8px);
-            min-height: 84px;
+            background: var(--bg-card2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px 16px;
+            min-height: 80px;
             display: flex;
             flex-direction: column;
             justify-content: center;
-            border-top: 3px solid rgba(10, 111, 184, 0.35);
+            transition: border-color 0.3s, box-shadow 0.3s;
+            animation: fadeSlideUp 0.4s ease both;
+        }
+        .status-card:hover {
+            border-color: var(--border-hot);
+            box-shadow: var(--glow-cyan);
+        }
+        @keyframes fadeSlideUp {
+            from { opacity: 0; transform: translateY(10px); }
+            to   { opacity: 1; transform: translateY(0); }
         }
         .status-label {
             display: block;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.65rem;
             color: var(--muted);
-            font-size: 0.79rem;
-            margin-bottom: 4px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            margin-bottom: 6px;
         }
         .status-value {
             display: block;
-            color: var(--ink);
+            font-family: 'JetBrains Mono', monospace;
             font-size: 1rem;
             font-weight: 700;
-            font-family: 'Inter', sans-serif;
+            color: var(--cyan);
             line-height: 1.2;
             word-break: break-word;
         }
-        .state-strip {
-            margin-top: 12px;
-            padding: 14px;
-            border-radius: 20px;
-            background: rgba(255,255,255,0.72);
-            border: 1px solid rgba(8, 64, 102, 0.10);
-            box-shadow: 0 12px 28px rgba(8, 30, 52, 0.08);
-        }
-        .state-strip, .map-wrap {
-            transition: opacity 180ms ease, transform 180ms ease;
-        }
+
+        /* ── PILLS & ALERTS ── */
         .state-meta {
             display: flex;
             flex-wrap: wrap;
-            gap: 10px;
-            margin-top: 12px;
-            color: var(--muted);
-            font-size: 0.88rem;
+            gap: 8px;
+            margin-top: 14px;
         }
         .state-pill {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 7px 10px;
-            border-radius: 999px;
-            background: rgba(10, 111, 184, 0.08);
-            color: #114a77;
-            border: 1px solid rgba(10, 111, 184, 0.16);
-        }
-        .control-strip {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            margin-bottom: 12px;
-        }
-        .control-strip button {
-            border-radius: 999px !important;
-            border: 1px solid rgba(10, 111, 184, 0.16) !important;
-            padding: 0.42rem 0.95rem !important;
-            min-height: 2.4rem !important;
-            box-shadow: 0 8px 18px rgba(8, 30, 52, 0.08);
+            gap: 5px;
+            padding: 5px 10px;
+            border-radius: 4px;
+            background: rgba(0,200,255,0.06);
+            color: var(--cyan);
+            border: 1px solid rgba(0,200,255,0.15);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            letter-spacing: 0.06em;
         }
         .alert-chip {
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            padding: 7px 10px;
-            border-radius: 999px;
-            background: rgba(8, 184, 153, 0.10);
-            border: 1px solid rgba(8, 184, 153, 0.18);
-            color: #165244;
-            font-size: 0.84rem;
-            margin: 4px 6px 0 0;
+            padding: 5px 10px;
+            border-radius: 4px;
+            background: rgba(245, 166, 35, 0.08);
+            border: 1px solid rgba(245, 166, 35, 0.22);
+            color: var(--amber);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            letter-spacing: 0.04em;
         }
         .alert-chip--none {
-            background: rgba(95, 114, 135, 0.08);
-            border-color: rgba(95, 114, 135, 0.14);
+            background: rgba(77, 106, 133, 0.10);
+            border-color: rgba(77, 106, 133, 0.20);
             color: var(--muted);
         }
-        .panel-title {
-            font-family: 'Barlow', sans-serif;
-            font-size: 1.03rem;
-            font-weight: 700;
-            color: #153a59;
-            margin: 6px 0 10px;
+
+        /* ── CONTROLS ── */
+        .control-strip {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 14px;
         }
-        .status-chip {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 10px;
-            border-radius: 999px;
-            background: rgba(255,255,255,0.16);
-            border: 1px solid rgba(255,255,255,0.24);
-            color: white;
-            font-weight: 600;
-            font-size: 0.84rem;
-            margin-right: 8px;
-            margin-top: 10px;
+        .stButton > button {
+            background: transparent !important;
+            border: 1px solid var(--border-hot) !important;
+            color: var(--cyan) !important;
+            font-family: 'Rajdhani', sans-serif !important;
+            font-weight: 600 !important;
+            font-size: 0.85rem !important;
+            letter-spacing: 0.08em !important;
+            text-transform: uppercase !important;
+            border-radius: 6px !important;
+            padding: 0.45rem 1.1rem !important;
+            transition: background 0.2s, box-shadow 0.2s !important;
         }
+        .stButton > button:hover {
+            background: rgba(0, 200, 255, 0.10) !important;
+            box-shadow: var(--glow-cyan) !important;
+        }
+        [data-testid="stAlert"] {
+            background: rgba(245, 166, 35, 0.07) !important;
+            border: 1px solid rgba(245, 166, 35, 0.25) !important;
+            border-radius: 8px !important;
+            color: var(--amber) !important;
+            font-family: 'DM Sans', sans-serif !important;
+        }
+        [data-testid="stExpander"] {
+            background: var(--bg-card) !important;
+            border: 1px solid var(--border) !important;
+            border-radius: 10px !important;
+        }
+        [data-testid="stExpander"] summary {
+            color: var(--muted) !important;
+            font-family: 'JetBrains Mono', monospace !important;
+            font-size: 0.78rem !important;
+            letter-spacing: 0.06em !important;
+        }
+
+        /* ── MAP WRAPPER ── */
         .map-wrap {
-            margin-top: 14px;
-            padding: 14px;
-            background: rgba(255,255,255,0.78);
-            border: 1px solid rgba(8, 64, 102, 0.12);
-            border-radius: 22px;
-            box-shadow: var(--shadow);
+            margin-top: 16px;
+            padding: 4px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-hot);
+            border-radius: 16px;
+            box-shadow: var(--glow-cyan), 0 24px 60px rgba(0,0,0,0.5);
         }
         iframe {
             height: 100vh !important;
-            border-radius: 18px;
+            border-radius: 13px;
+            display: block;
         }
-        .streamlit-expanderHeader {
-            font-family: 'Inter', sans-serif;
+
+        /* ── SOFT SYNC ── */
+        body.conductor-soft-sync {
+            opacity: 0.88;
+            filter: saturate(0.9) brightness(0.97);
+            transition: opacity 180ms ease, filter 180ms ease;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -331,74 +433,90 @@ def startup_reset_once() -> bool:
 
 def render_state_debug(state: dict[str, object], destination_id: str, destination_name: str, traffic_alerts: list[str]) -> None:
     with st.container():
+        alert_count = len(traffic_alerts)
+        alert_color = "#f5a623" if alert_count else "#4d6a85"
+        alert_label = f"{alert_count} ALERTA{'S' if alert_count != 1 else ''}" if alert_count else "SIN ALERTAS"
+        dest_display = destination_name or destination_id or "ESPERANDO OPERADOR"
+
         st.markdown(
-            """
+            f"""
             <div class="hero-shell">
-                <h1>Conductor Smart City</h1>
-                <p>Ruta operativa en tiempo real, con sincronización desde operador y visualización de tráfico urbano.</p>
-                <span class="status-chip">Sincronización activa</span>
-                <span class="status-chip">Ruta por red vial</span>
-                <span class="status-chip">Panel operativo</span>
+                <h1>Ambulanc<span>IA</span> · Conductor</h1>
+                <p>Ruta operativa en tiempo real · Sincronización con operador · Red vial de Madrid</p>
+                <div style="margin-top:12px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+                    <span class="status-chip"><span class="live-dot"></span>EN VIVO</span>
+                    <span class="status-chip">RED VIAL</span>
+                    <span class="status-chip" style="color:{alert_color}; border-color:{alert_color}33;">⚠ {alert_label}</span>
+                    <span class="status-chip" style="color:#00e896; border-color:#00e89633;">↗ {dest_display[:32]}</span>
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-        st.markdown('<div class="control-strip">', unsafe_allow_html=True)
-        a, b, c = st.columns([1, 1, 3], gap="small")
-        with a:
-            if st.button("Sincronizar", type="primary", use_container_width=True):
+
+        col_sync, col_reset, col_hint = st.columns([1, 1, 4], gap="small")
+        with col_sync:
+            if st.button("⟳  Sincronizar", type="primary", use_container_width=True):
                 st.rerun()
-        with b:
-            if st.button("Reset", type="secondary", use_container_width=True):
+        with col_reset:
+            if st.button("↺  Reset", type="secondary", use_container_width=True):
                 reset_operativo()
                 st.rerun()
-        with c:
+        with col_hint:
             st.markdown(
-                '<div style="padding:0.55rem 0.2rem;color:#5f7287;font-size:0.9rem;">'
-                'La barra superior resume el estado actual y la información se refresca al sincronizar desde el operador.'
-                '</div>',
+                '<p style="padding:0.55rem 0.4rem; font-family:\'JetBrains Mono\',monospace; '
+                'font-size:0.72rem; color:#4d6a85; letter-spacing:0.04em; margin:0;">'
+                '// Estado se refresca al pulsar Sincronizar o cuando el operador publica una nueva orden</p>',
                 unsafe_allow_html=True,
             )
-        st.markdown('</div>', unsafe_allow_html=True)
+
+        updated_at = str(state.get("updated_at", "-"))[:19].replace("T", " ")
+        version_val = state.get("version", 0)
 
         st.markdown('<div class="state-strip">', unsafe_allow_html=True)
-        st.markdown('<div class="panel-title">Estado compartido</div>', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title">▸ Estado compartido</div>', unsafe_allow_html=True)
         c1, c2, c3, c4 = st.columns(4, gap="small")
         with c1:
             st.markdown(
-                f'<div class="status-card"><span class="status-label">Versión</span><span class="status-value">{state.get("version", 0)}</span></div>',
+                f'<div class="status-card" style="animation-delay:0.05s">'
+                f'<span class="status-label">// versión</span>'
+                f'<span class="status-value">v{version_val}</span></div>',
                 unsafe_allow_html=True,
             )
         with c2:
             st.markdown(
-                f'<div class="status-card"><span class="status-label">Actualización</span><span class="status-value">{str(state.get("updated_at", "-"))[:19].replace("T", " ")}</span></div>',
+                f'<div class="status-card" style="animation-delay:0.10s">'
+                f'<span class="status-label">// actualizado</span>'
+                f'<span class="status-value" style="font-size:0.82rem;">{updated_at}</span></div>',
                 unsafe_allow_html=True,
             )
         with c3:
             st.markdown(
-                f'<div class="status-card"><span class="status-label">Destino</span><span class="status-value">{destination_id or "-"}</span></div>',
+                f'<div class="status-card" style="animation-delay:0.15s">'
+                f'<span class="status-label">// id destino</span>'
+                f'<span class="status-value">{destination_id or "—"}</span></div>',
                 unsafe_allow_html=True,
             )
         with c4:
             st.markdown(
-                f'<div class="status-card"><span class="status-label">Nombre</span><span class="status-value">{destination_name or "-"}</span></div>',
+                f'<div class="status-card" style="animation-delay:0.20s">'
+                f'<span class="status-label">// nombre destino</span>'
+                f'<span class="status-value" style="font-size:0.82rem;">{destination_name or "—"}</span></div>',
                 unsafe_allow_html=True,
             )
 
         st.markdown('<div class="state-meta">', unsafe_allow_html=True)
-        st.markdown('<span class="state-pill">Sincronización activa</span>', unsafe_allow_html=True)
-        st.markdown('<span class="state-pill">Ruta por red vial</span>', unsafe_allow_html=True)
+        st.markdown('<span class="state-pill">● SYNC ACTIVO</span>', unsafe_allow_html=True)
+        st.markdown('<span class="state-pill">◈ RUTA RED VIAL</span>', unsafe_allow_html=True)
         if traffic_alerts:
-            st.markdown(
-                '<span class="alert-chip">Alertas: ' + ' · '.join(traffic_alerts) + '</span>',
-                unsafe_allow_html=True,
-            )
+            for a in traffic_alerts:
+                st.markdown(f'<span class="alert-chip">⚠ {a}</span>', unsafe_allow_html=True)
         else:
-            st.markdown('<span class="alert-chip alert-chip--none">Alertas: ninguna</span>', unsafe_allow_html=True)
+            st.markdown('<span class="alert-chip alert-chip--none">✓ sin alertas de tráfico</span>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-        with st.expander("Ver estado compartido completo"):
+        with st.expander("// ver estado JSON completo"):
             st.json(state)
 
 
@@ -549,45 +667,97 @@ html_crudo = """
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
-        html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; background-color: #f4f4f4; overflow: hidden; }
-        @keyframes pulseRed { 0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); } 70% { box-shadow: 0 0 0 15px rgba(220, 53, 69, 0); } 100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); } }
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Rajdhani:wght@600;700&display=swap');
+        html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; background-color: #080e18; overflow: hidden; }
+
+        @keyframes pulseRed  { 0%,100%{box-shadow:0 0 0 0 rgba(255,71,87,0.8)} 60%{box-shadow:0 0 0 14px rgba(255,71,87,0)} }
+        @keyframes pulseCyan { 0%,100%{box-shadow:0 0 0 0 rgba(0,200,255,0.7)} 60%{box-shadow:0 0 0 12px rgba(0,200,255,0)} }
+        @keyframes glowTarget{ 0%,100%{box-shadow:0 0 6px 2px rgba(0,200,255,0.4)} 50%{box-shadow:0 0 22px 8px rgba(0,200,255,0.75)} }
+        @keyframes scanline  { 0%{background-position:0 0} 100%{background-position:0 4px} }
+
         .sos-marker {
-            background-color: #dc3545; border: 2px solid white; border-radius: 50%;
-            color: white; font-weight: 700; font-size: 14px; text-align: center; line-height: 28px;
-            box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); animation: pulseRed 1.4s infinite;
+            background: linear-gradient(135deg,#c0001a,#ff2240);
+            border: 2px solid rgba(255,255,255,0.9); border-radius: 50%;
+            color: white; font-family:'Rajdhani',sans-serif; font-weight:700; font-size:11px;
+            text-align:center; line-height:28px; letter-spacing:0.06em;
+            animation: pulseRed 1.4s infinite;
         }
-        .punto-paciente { 
-            background-color: #dc3545; border: 2px solid white; border-radius: 50%; 
-            animation: pulseRed 1.5s infinite; color: white; font-weight: bold; 
-            font-size: 9px; text-align: center; line-height: 22px; 
-            box-shadow: 0 2px 5px rgba(0,0,0,0.5); z-index: 1000 !important;
+        .amb-icon { font-size:30px; text-align:center; filter:drop-shadow(0 0 8px rgba(0,200,255,0.9)); z-index:1001 !important; }
+        .hosp-marker {
+            background: #0d1624; border: 2px solid; border-radius: 8px;
+            text-align:center; line-height:26px; font-size:15px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+            transition: all 0.4s ease;
         }
-        .ruta-holografica { stroke-dasharray: 10, 15; animation: flowDash 1s linear infinite; }
-        @keyframes flowDash { to { stroke-dashoffset: -25; } }
-        .amb-icon { font-size: 32px; text-shadow: 2px 2px 5px rgba(0,0,0,0.8); text-align: center; z-index: 1001 !important; }
-        .hosp-marker { background-color: white; border: 3px solid; border-radius: 50%; text-align: center; line-height: 24px; font-size: 16px; box-shadow: 0 3px 6px rgba(0,0,0,0.4); transition: all 0.5s ease; }
-        .hosp-green { border-color: #2ecc71; }
-        .hosp-orange { border-color: #f39c12; }
-        .hosp-red { border-color: #e74c3c; }
-        @keyframes glowTarget { 0% { box-shadow: 0 0 5px 2px rgba(52, 152, 219, 0.5); } 50% { box-shadow: 0 0 20px 8px rgba(52, 152, 219, 0.8); } 100% { box-shadow: 0 0 5px 2px rgba(52, 152, 219, 0.5); } }
-        .hosp-target { border-color: #3498db !important; animation: glowTarget 1.5s infinite; z-index: 900 !important; transform: scale(1.2); }
-        .ambu-marker { background-color: #e8f4f8; border: 2px solid #3498db; border-radius: 5px; text-align: center; line-height: 22px; font-size: 16px; }
-        .custom-tip { font-family: Arial, sans-serif; font-size: 13px; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); border: none; text-align: center; }
-        .traffic-tip { background-color: rgba(255,255,255,0.9); font-weight: bold; }
-        .progress-bg { background: #e0e0e0; width: 100%; height: 8px; border-radius: 4px; margin-top: 4px; overflow: hidden; }
-        .progress-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
-        #hud { position: absolute; top: 14px; right: 14px; z-index: 1200; background: rgba(255,255,255,0.95); border-radius: 10px; padding: 10px 12px; border: 1px solid rgba(0,0,0,0.12); width: 320px; font-family: Arial, sans-serif; }
-        .row { display: flex; justify-content: space-between; margin: 4px 0; font-size: 13px; }
-        .alerts { margin-top: 8px; font-size: 12px; max-height: 90px; overflow: auto; }
+        .hosp-green  { border-color:#00e896; box-shadow:0 0 8px rgba(0,232,150,0.25); }
+        .hosp-orange { border-color:#f5a623; box-shadow:0 0 8px rgba(245,166,35,0.25); }
+        .hosp-red    { border-color:#ff4757; box-shadow:0 0 8px rgba(255,71,87,0.25); }
+        .hosp-target { border-color:#00c8ff !important; animation:glowTarget 1.5s infinite; z-index:900 !important; transform:scale(1.25); }
+        .ambu-marker { background:#0d1624; border:2px solid #00c8ff; border-radius:6px; text-align:center; line-height:22px; font-size:15px; }
+
+        .custom-tip {
+            font-family:'JetBrains Mono',monospace; font-size:12px;
+            border-radius:8px; border:1px solid rgba(0,200,255,0.25) !important;
+            background:#0d1624 !important; color:#d6e8f5 !important;
+            box-shadow:0 4px 16px rgba(0,0,0,0.6), 0 0 12px rgba(0,200,255,0.12);
+        }
+        .leaflet-tooltip.custom-tip { padding:8px 12px; }
+        .traffic-tip { font-weight:700; }
+
+        .progress-bg   { background:#1a2a3a; width:100%; height:6px; border-radius:3px; margin-top:5px; overflow:hidden; }
+        .progress-fill { height:100%; border-radius:3px; transition:width 0.5s ease; }
+
+        #hud {
+            position:absolute; top:14px; right:14px; z-index:1200;
+            background:rgba(8,14,24,0.94);
+            border:1px solid rgba(0,200,255,0.22);
+            border-radius:12px; padding:14px 16px;
+            width:300px;
+            font-family:'JetBrains Mono',monospace;
+            box-shadow:0 0 24px rgba(0,200,255,0.12), 0 8px 32px rgba(0,0,0,0.7);
+            backdrop-filter:blur(8px);
+        }
+        #hud::before {
+            content:'';
+            position:absolute; inset:0; border-radius:12px;
+            background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,200,255,0.015) 3px,rgba(0,200,255,0.015) 4px);
+            pointer-events:none;
+        }
+        .hud-title {
+            font-family:'Rajdhani',sans-serif; font-weight:700;
+            font-size:0.95rem; letter-spacing:0.1em; text-transform:uppercase;
+            color:#fff; margin-bottom:10px;
+            border-bottom:1px solid rgba(0,200,255,0.15); padding-bottom:8px;
+            display:flex; justify-content:space-between; align-items:center;
+        }
+        .live-badge {
+            font-family:'JetBrains Mono',monospace; font-size:0.6rem;
+            color:#00e896; border:1px solid rgba(0,232,150,0.35);
+            padding:2px 6px; border-radius:3px; letter-spacing:0.1em;
+            animation:pulseCyan 2s infinite;
+        }
+        .hud-row {
+            display:flex; justify-content:space-between; align-items:center;
+            margin:6px 0; font-size:0.72rem;
+        }
+        .hud-label { color:rgba(100,160,200,0.7); letter-spacing:0.08em; text-transform:uppercase; }
+        .hud-val   { color:#00c8ff; font-weight:700; font-size:0.8rem; }
+        .hud-sep   { border:none; border-top:1px solid rgba(0,200,255,0.10); margin:8px 0; }
+        .alerts-title { color:rgba(245,166,35,0.8); font-size:0.65rem; letter-spacing:0.1em; text-transform:uppercase; margin-bottom:4px; }
+        .alerts { font-size:0.68rem; max-height:80px; overflow:auto; color:rgba(214,232,245,0.65); }
+        .alerts li { margin:3px 0; list-style:none; padding-left:0; }
+        .alerts li::before { content:'⚠ '; color:#f5a623; }
     </style>
 </head>
 <body>
     <div id="hud">
-      <div class="row"><b>Conductor Smart City</b><span>🚑</span></div>
-      <div class="row"><span>Destino</span><b id="kDestino">-</b></div>
-      <div class="row"><span>ETA</span><b id="kEta">-</b></div>
-      <div class="row"><span>Distancia</span><b id="kDist">-</b></div>
-      <div class="alerts"><b>Alertas</b><ul id="alerts"></ul></div>
+        <div class="hud-title">Conductor AmbulancIA <span class="live-badge">EN VIVO</span></div>
+        <div class="hud-row"><span class="hud-label">Destino</span><b class="hud-val" id="kDestino">—</b></div>
+        <div class="hud-row"><span class="hud-label">ETA</span><b class="hud-val" id="kEta">—</b></div>
+        <div class="hud-row"><span class="hud-label">Distancia</span><b class="hud-val" id="kDist">—</b></div>
+        <hr class="hud-sep">
+        <div class="alerts-title">Alertas de tráfico</div>
+        <ul class="alerts" id="alerts"></ul>
     </div>
     <div id="map"></div>
 
@@ -598,7 +768,9 @@ html_crudo = """
         const alerts = __ALERTS__;
 
         const map = L.map('map', {preferCanvas: true}).setView([40.4168, -3.7038], 13);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png').addTo(map);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+            attribution: '© CartoDB'
+        }).addTo(map);
 
         // Restore parent page scroll after auto-refresh to avoid visual jump.
         try {
@@ -621,46 +793,56 @@ html_crudo = """
 
         zonasTrafico.forEach(function(zona) {
             if (zona.nivel === "Bajo") return;
-            const colorFondo = zona.nivel === "Alto" ? '#ff4d4d' : '#ffcc00';
-            L.circle([zona.lat, zona.lon], { radius: zona.radio, color: colorFondo, fillColor: colorFondo, fillOpacity: 0.12, weight: 1, opacity: 0.25 })
+            const color = zona.nivel === "Alto" ? '#ff4757' : '#f5a623';
+            L.circle([zona.lat, zona.lon], { radius: zona.radio, color: color, fillColor: color, fillOpacity: 0.10, weight: 1, opacity: 0.30 })
               .bindTooltip("🚥 Tráfico: <b>" + zona.nivel + "</b>", { direction: 'center', className: 'custom-tip traffic-tip' })
               .addTo(map);
         });
 
         ambulatorios.forEach(function(a) {
             const icon = L.divIcon({className: 'ambu-marker', html: '🩺', iconSize: [26,26], iconAnchor: [13,13]});
-            L.marker([a.lat, a.lon], {icon: icon}).bindTooltip("<b>Base SVB</b><br>" + a.nombre, {direction: 'top', className: 'custom-tip'}).addTo(map);
+            L.marker([a.lat, a.lon], {icon: icon}).bindTooltip("<b style='color:#00c8ff'>BASE SVB</b><br>" + a.nombre, {direction: 'top', className: 'custom-tip'}).addTo(map);
         });
 
         const alertsEl = document.getElementById('alerts');
-        alerts.forEach((a) => {
-          const li = document.createElement('li');
-          li.textContent = a;
-          alertsEl.appendChild(li);
-        });
+        if (alerts.length) {
+            alerts.forEach((a) => {
+                const li = document.createElement('li');
+                li.textContent = a;
+                alertsEl.appendChild(li);
+            });
+        } else {
+            const li = document.createElement('li');
+            li.textContent = 'Sin alertas activas';
+            li.style.color = 'rgba(0,232,150,0.7)';
+            li.style.listStyle = 'none';
+            li.textContent = '✓ Sin alertas activas';
+            alertsEl.appendChild(li);
+        }
 
         const op = operativos[0];
         document.getElementById('kDestino').textContent = op.esperando_destino ? 'Esperando operador' : op.destino.nombre;
 
         const sosIcon = L.divIcon({className: 'sos-marker', html: 'SOS', iconSize: [28,28], iconAnchor: [14,14]});
         const markerSOS = L.marker([op.sos.lat, op.sos.lon], {icon: sosIcon}).addTo(map);
-        markerSOS.bindTooltip('<b>Señal de socorro</b><br>' + op.sos.nombre, {direction: 'top', className: 'custom-tip'});
+        markerSOS.bindTooltip('<b style="color:#ff4757">SEÑAL SOS</b><br>' + op.sos.nombre, {direction: 'top', className: 'custom-tip'});
 
         const hospitalMarkers = {};
         op.hospitales.forEach(function(h) {
             const colorClass = (h.occ > 85 ? 'hosp-red' : (h.occ > 50 ? 'hosp-orange' : 'hosp-green'));
-            const barColor = h.occ > 85 ? '#e74c3c' : (h.occ > 50 ? '#f39c12' : '#2ecc71');
+            const barColor = h.occ > 85 ? '#ff4757' : (h.occ > 50 ? '#f5a623' : '#00e896');
             const icon = L.divIcon({className: 'hosp-marker ' + colorClass, html: '🏥', iconSize: [30,30], iconAnchor: [15,15]});
             const marker = L.marker([h.lat, h.lon], {icon: icon}).addTo(map);
             const tipHTML = `
-              <div style="text-align: left;">
-                <center><b>${h.nombre}</b></center><hr style="margin:4px 0;">
-                <div>📍 <b>Dirección:</b><br>${h.direccion || 'No disponible'}</div>
-                <div style="margin-top:4px;">🩺 <b>Especialidades:</b><br>${h.especialidades || 'No disponible'}</div>
-                <div style="margin-top:4px;">🧠 <b>Perfiles:</b> ${h.perfiles || 'No definido'}</div>
-                🛏️ Ocupación: <b>${h.occ}%</b>
-                <div class="progress-bg"><div class="progress-fill" style="width: ${h.occ}%; background-color: ${barColor};"></div></div>
-                <div style="margin-top:4px;">⏱️ Espera: <b>${h.wait} min</b></div>
+              <div style="text-align:left; min-width:200px;">
+                <div style="font-family:'Rajdhani',sans-serif; font-size:14px; font-weight:700; color:#fff; margin-bottom:6px;">${h.nombre}</div>
+                <div style="color:rgba(0,200,255,0.7); font-size:10px; margin-bottom:6px;">📍 ${h.direccion || '—'}</div>
+                <div style="color:rgba(214,232,245,0.6); font-size:10px; margin-bottom:4px;">🩺 ${h.especialidades || 'No disponible'}</div>
+                <div style="display:flex; justify-content:space-between; margin-top:6px;">
+                  <span>🛏️ Ocupación: <b style="color:${barColor}">${h.occ}%</b></span>
+                  <span>⏱ <b style="color:#f5a623">${h.wait} min</b></span>
+                </div>
+                <div class="progress-bg"><div class="progress-fill" style="width: ${h.occ}%; background: linear-gradient(90deg,${barColor},${barColor}88);"></div></div>
               </div>`;
             marker.bindTooltip(tipHTML, {direction: 'top', offset: [0, -15], className: 'custom-tip'});
             hospitalMarkers[h.nombre] = marker;
@@ -703,9 +885,9 @@ html_crudo = """
                 const sosSuave = hasSosRoute ? densificar(gpsSos, 0.00018) : [ambStart, [op.sos.lat, op.sos.lon]];
                 const hospSuave = hasHospRoute ? densificar(gpsHosp, 0.00018) : [[op.sos.lat, op.sos.lon]];
 
-                const routeLineSos = hasSosRoute ? L.polyline(gpsSos, {color: '#ff7a18', weight: 4, opacity: 0.55, dashArray: '10,10'}).addTo(map) : null;
-                const routeLineHosp = hasHospRoute ? L.polyline(gpsHosp, {color: '#1a73e8', weight: 4, opacity: 0.5, dashArray: '8,10'}).addTo(map) : null;
-                const doneLine = L.polyline([sosSuave[0]], {color: '#19e872', weight: 5, opacity: 0.9}).addTo(map);
+                const routeLineSos = hasSosRoute ? L.polyline(gpsSos, {color: '#f5a623', weight: 3, opacity: 0.65, dashArray: '8,10'}).addTo(map) : null;
+                const routeLineHosp = hasHospRoute ? L.polyline(gpsHosp, {color: '#00c8ff', weight: 3, opacity: 0.55, dashArray: '6,9'}).addTo(map) : null;
+                const doneLine = L.polyline([sosSuave[0]], {color: '#00e896', weight: 5, opacity: 0.9}).addTo(map);
 
         const ambIcon = L.divIcon({className: 'amb-icon', html: '🚑', iconSize: [32,32], iconAnchor: [16,16]});
         const markerAmb = L.marker(sosSuave[0], {icon: ambIcon}).addTo(map);

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import os
 import pickle
 import sys
@@ -15,17 +16,18 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from clinical_llm import FEATURE_ORDER, analyze_clinical_diagnosis
+
 try:
     from ml.urgency_specialty_classifier import transcribe_audio_file
 except ImportError:
     transcribe_audio_file = None
+
 from visual.dispatch_shared import load_state, update_state
 
 PROCESSED_HOSPITALES_PATH = (
     PROJECT_ROOT / "analisis_datos" / "data" / "processed" / "centros_servicios_establecimientos_sanitarios_limpio.csv"
 )
 AUDIO_SAMPLES_PATH = PROJECT_ROOT / "audio" / "samples"
-
 
 st.set_page_config(page_title="AmbulancIA - Operador", layout="wide")
 
@@ -67,6 +69,32 @@ st.markdown(
                 padding: 10px 12px;
                 color: #e0e0e0;
       }
+            .kpi-grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 10px;
+                margin-bottom: 10px;
+            }
+            .kpi {
+                border: 1px solid rgba(88,166,255,0.18);
+                border-radius: 10px;
+                background: #161c34;
+                padding: 10px 12px;
+            }
+            .kpi-label {
+                font-size: 0.72rem;
+                color: #8bb9ff;
+                margin-bottom: 4px;
+            }
+            .kpi-main {
+                font-size: 1rem;
+                font-weight: 700;
+                color: #e6f0ff;
+            }
+            .kpi-sub {
+                font-size: 0.78rem;
+                color: #9db6d6;
+            }
     </style>
     """,
     unsafe_allow_html=True,
@@ -358,10 +386,7 @@ def main() -> None:
     if "operator_text" not in st.session_state:
         st.session_state["operator_text"] = ""
 
-    top_a, top_b = st.columns([1, 1], gap="large")
-    with top_a:
-        st.markdown('<div class="soft"><b>Flujo:</b> audio/texto → vector → prediccion → explicabilidad → publicacion al conductor.</div>', unsafe_allow_html=True)
-    with top_b:
+    with st.container():
         state_now = load_state()
         st.markdown(
             f'<div class="soft"><b>Version compartida actual:</b> {state_now.get("version", 0)} | '
@@ -375,15 +400,32 @@ def main() -> None:
         st.markdown('<div class="section-title">1) Entrada de audio y texto</div>', unsafe_allow_html=True)
         audio_samples = get_audio_samples()
         audio_options = ["-- seleccionar --"] + [str(path.relative_to(PROJECT_ROOT)) for path in audio_samples]
-        selected_audio = st.selectbox("Sample de audio", audio_options)
 
-        a1, a2 = st.columns(2)
-        with a1:
-            stt_model = st.selectbox("Modelo STT", ["tiny", "base", "small", "medium", "large-v3"], index=3)
-        with a2:
-            stt_lang = st.selectbox("Idioma", ["es", "en", "auto"], index=0)
+        left_in, right_in = st.columns([1.15, 1], gap="medium")
+        with left_in:
+            selected_audio = st.selectbox("Sample de audio", audio_options)
+            if selected_audio != "-- seleccionar --":
+                st.audio(str(PROJECT_ROOT / selected_audio))
 
-        if st.button("Transcribir", use_container_width=True):
+            a1, a2 = st.columns(2)
+            with a1:
+                stt_model = st.selectbox("Modelo STT", ["tiny", "base", "small", "medium", "large-v3"], index=1)
+            with a2:
+                stt_lang = st.selectbox("Idioma", ["es", "en", "auto"], index=0)
+
+            run_transcribe = st.button("Transcribir", use_container_width=True)
+
+        with right_in:
+            llm_model = st.text_input(
+                "Modelo LLM extractor",
+                value=os.getenv("AMBULANCIA_LLM_MODEL", "llama3.1:8b-instruct"),
+            )
+            st.markdown(
+                '<div class="soft" style="margin-top:6px;">Ajusta el modelo de extraccion antes de generar el vector clinico.</div>',
+                unsafe_allow_html=True,
+            )
+
+        if run_transcribe:
             if transcribe_audio_file is None:
                 st.error(
                     "La funcion de transcripcion no esta disponible en ml/urgency_specialty_classifier.py. "
@@ -408,7 +450,6 @@ def main() -> None:
                 except Exception as exc:
                     st.error(f"Error de transcripcion: {exc}")
 
-        llm_model = st.text_input("Modelo LLM extractor", value=os.getenv("AMBULANCIA_LLM_MODEL", "llama3.1:8b-instruct"))
         text = st.text_area("Texto clinico editable", value=st.session_state["operator_text"], height=210)
         st.session_state["operator_text"] = text
 
@@ -431,8 +472,23 @@ def main() -> None:
         st.markdown('<div class="section-title">2) Resultado rapido y explicabilidad</div>', unsafe_allow_html=True)
         if "prediction" in st.session_state:
             pred = st.session_state["prediction"]
-            st.metric("Urgencia", pred["urgencia"]["name"], f"Conf. {pred['urgencia']['confidence']:.2f}")
-            st.metric("Especialidad", pred["especialidad"]["name"], f"Conf. {pred['especialidad']['confidence']:.2f}")
+                        st.markdown(
+                                f"""
+                                <div class="kpi-grid">
+                                    <div class="kpi">
+                                        <div class="kpi-label">Urgencia</div>
+                                        <div class="kpi-main">{html.escape(str(pred['urgencia']['name']))}</div>
+                                        <div class="kpi-sub">Conf. {pred['urgencia']['confidence']:.2f}</div>
+                                    </div>
+                                    <div class="kpi">
+                                        <div class="kpi-label">Especialidad</div>
+                                        <div class="kpi-main">{html.escape(str(pred['especialidad']['name']))}</div>
+                                        <div class="kpi-sub">Conf. {pred['especialidad']['confidence']:.2f}</div>
+                                    </div>
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                        )
 
             exp = st.session_state["explanation"]
             st.markdown("**Explicabilidad de urgencia**")
@@ -449,7 +505,10 @@ def main() -> None:
                 polished = optional_llm_refine(exp, llm_model)
                 st.text_area("Resumen narrativo", value=polished, height=140)
         else:
-            st.info("Aun no hay resultado. Al generar el vector apareceran aqui las explicaciones de urgencia y especialidad.")
+            st.markdown(
+                '<div class="soft">Aun no hay resultado. Al generar el vector apareceran aqui las explicaciones de urgencia y especialidad.</div>',
+                unsafe_allow_html=True,
+            )
 
     if "feature_map" in st.session_state:
         st.markdown("---")
