@@ -4,9 +4,12 @@ import html
 import os
 import pickle
 import sys
+import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List
 
+import networkx as nx
+import osmnx as ox
 import pandas as pd
 import streamlit as st
 import xgboost as xgb
@@ -27,6 +30,8 @@ from visual.dispatch_shared import load_state, update_state
 PROCESSED_HOSPITALES_PATH = (
     PROJECT_ROOT / "analisis_datos" / "data" / "processed" / "centros_servicios_establecimientos_sanitarios_limpio.csv"
 )
+GRAPH_PATH = PROJECT_ROOT / "visual" / "madrid_grafo.graphml"
+SAMUR_BASES_PATH = PROJECT_ROOT / "analisis_datos" / "data" / "processed" / "bases_samur_madrid.csv"
 AUDIO_SAMPLES_PATH = PROJECT_ROOT / "audio" / "samples"
 
 st.set_page_config(page_title="AmbulancIA - Operador", layout="wide")
@@ -95,6 +100,30 @@ st.markdown(
                 font-size: 0.78rem;
                 color: #9db6d6;
             }
+            .exp-grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 10px;
+                margin: 8px 0 10px;
+            }
+            .exp-card {
+                border: 1px solid rgba(63,185,80,0.25);
+                border-radius: 10px;
+                background: #0d3f1a;
+                padding: 10px 12px;
+                min-height: 142px;
+            }
+            .exp-title {
+                font-size: 0.78rem;
+                font-weight: 700;
+                color: #baf2c3;
+                margin-bottom: 6px;
+            }
+            .exp-body {
+                font-size: 0.84rem;
+                line-height: 1.35;
+                color: #7ee787;
+            }
     </style>
     """,
     unsafe_allow_html=True,
@@ -152,7 +181,60 @@ def load_hospitals() -> pd.DataFrame:
             df.at[idx, "telefono"] = f"+34 91{str(1000000 + idx)[-7:]}"
         if not str(row.get("email", "")).strip():
             df.at[idx, "email"] = f"admisiones.{cid.lower()}@hospital.madrid.es"
+
+    for col in ["lat", "lon"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
     return df
+
+
+@st.cache_resource
+def load_dispatch_graph() -> nx.MultiDiGraph | None:
+    if not GRAPH_PATH.exists():
+        return None
+    return ox.load_graphml(GRAPH_PATH)
+
+
+@st.cache_data
+def load_samur_bases_for_dispatch(_graph: nx.MultiDiGraph | None) -> List[Dict[str, Any]]:
+    if _graph is None:
+        return []
+
+    if SAMUR_BASES_PATH.exists():
+        bases_df = pd.read_csv(SAMUR_BASES_PATH, sep=";")
+        bases_df = bases_df.rename(columns={"latitud": "lat", "longitud": "lon"})
+        for col in ["lat", "lon"]:
+            bases_df[col] = pd.to_numeric(bases_df[col], errors="coerce")
+        bases_df = bases_df[bases_df["lat"].notna() & bases_df["lon"].notna()].copy()
+
+        out: List[Dict[str, Any]] = []
+        for _, row in bases_df.iterrows():
+            out.append(
+                {
+                    "nombre": str(row.get("nombre", "Base SAMUR")).strip() or "Base SAMUR",
+                    "lat": float(row["lat"]),
+                    "lon": float(row["lon"]),
+                    "nodo_red": int(ox.distance.nearest_nodes(_graph, X=float(row["lon"]), Y=float(row["lat"]))),
+                }
+            )
+        if out:
+            return out
+
+    return [
+        {
+            "nombre": "Base Central",
+            "lat": 40.4117,
+            "lon": -3.7430,
+            "nodo_red": int(ox.distance.nearest_nodes(_graph, X=-3.7430, Y=40.4117)),
+        }
+    ]
+
+
+def _normalize_text(value: Any) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or ""))
+    clean = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return " ".join(clean.lower().strip().split())
 
 
 def decode_urgency_label(raw_prediction: int, label_encoder: Any, urgency_names: Dict[int, str]) -> int:
@@ -360,12 +442,59 @@ def optional_llm_refine(base_explanation: Dict[str, Any], model_name: str) -> st
 
 
 def select_hospital(hospitals: pd.DataFrame, specialty_name: str) -> pd.Series:
-    filtered = hospitals
-    if specialty_name:
-        m = hospitals["especialidades_texto"].astype(str).str.contains(specialty_name, case=False, na=False)
-        if m.any():
-            filtered = hospitals[m]
-    return filtered.iloc[0]
+    if hospitals.empty:
+        raise ValueError("No hay hospitales disponibles para seleccionar")
+
+    graph = load_dispatch_graph()
+    bases = load_samur_bases_for_dispatch(graph)
+    specialty_norm = _normalize_text(specialty_name)
+
+    specialty_candidates = pd.DataFrame()
+    if specialty_norm and "especialidades_texto" in hospitals.columns:
+        specialty_candidates = hospitals[
+            hospitals["especialidades_texto"].astype(str).apply(lambda text: specialty_norm in _normalize_text(text))
+        ]
+
+    search_space = specialty_candidates if not specialty_candidates.empty else hospitals
+
+    if graph is None or search_space.empty or "lat" not in search_space.columns or "lon" not in search_space.columns:
+        return search_space.iloc[0] if not search_space.empty else hospitals.iloc[0]
+
+    best_idx = None
+    best_cost = float("inf")
+    for idx, row in search_space.iterrows():
+        lat = row.get("lat")
+        lon = row.get("lon")
+        if pd.isna(lat) or pd.isna(lon):
+            continue
+
+        try:
+            target_node = int(ox.distance.nearest_nodes(graph, X=float(lon), Y=float(lat)))
+        except Exception:
+            continue
+
+        for base in bases:
+            for weight in ("weighted_length", "length"):
+                try:
+                    cost = float(
+                        nx.shortest_path_length(
+                            graph,
+                            source=int(base["nodo_red"]),
+                            target=target_node,
+                            weight=weight,
+                        )
+                    )
+                except Exception:
+                    continue
+
+                if cost < best_cost:
+                    best_cost = cost
+                    best_idx = idx
+
+    if best_idx is not None:
+        return search_space.loc[best_idx]
+
+    return search_space.iloc[0] if not search_space.empty else hospitals.iloc[0]
 
 
 def get_audio_samples() -> List[Path]:
@@ -472,30 +601,40 @@ def main() -> None:
         st.markdown('<div class="section-title">2) Resultado rapido y explicabilidad</div>', unsafe_allow_html=True)
         if "prediction" in st.session_state:
             pred = st.session_state["prediction"]
-                        st.markdown(
-                                f"""
-                                <div class="kpi-grid">
-                                    <div class="kpi">
-                                        <div class="kpi-label">Urgencia</div>
-                                        <div class="kpi-main">{html.escape(str(pred['urgencia']['name']))}</div>
-                                        <div class="kpi-sub">Conf. {pred['urgencia']['confidence']:.2f}</div>
-                                    </div>
-                                    <div class="kpi">
-                                        <div class="kpi-label">Especialidad</div>
-                                        <div class="kpi-main">{html.escape(str(pred['especialidad']['name']))}</div>
-                                        <div class="kpi-sub">Conf. {pred['especialidad']['confidence']:.2f}</div>
-                                    </div>
-                                </div>
-                                """,
-                                unsafe_allow_html=True,
-                        )
+            st.markdown(
+                f"""
+                <div class="kpi-grid">
+                    <div class="kpi">
+                        <div class="kpi-label">Urgencia</div>
+                        <div class="kpi-main">{html.escape(str(pred['urgencia']['name']))}</div>
+                        <div class="kpi-sub">Conf. {pred['urgencia']['confidence']:.2f}</div>
+                    </div>
+                    <div class="kpi">
+                        <div class="kpi-label">Especialidad</div>
+                        <div class="kpi-main">{html.escape(str(pred['especialidad']['name']))}</div>
+                        <div class="kpi-sub">Conf. {pred['especialidad']['confidence']:.2f}</div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
             exp = st.session_state["explanation"]
-            st.markdown("**Explicabilidad de urgencia**")
-            st.markdown('<div class="ok">' + exp["urgencia_text"] + "</div>", unsafe_allow_html=True)
-
-            st.markdown("**Explicabilidad de especialidad**")
-            st.markdown('<div class="ok" style="margin-top:8px;">' + exp["especialidad_text"] + "</div>", unsafe_allow_html=True)
+            st.markdown(
+                f"""
+                <div class="exp-grid">
+                    <div class="exp-card">
+                        <div class="exp-title">Explicabilidad de urgencia</div>
+                        <div class="exp-body">{html.escape(exp['urgencia_text'])}</div>
+                    </div>
+                    <div class="exp-card">
+                        <div class="exp-title">Explicabilidad de especialidad</div>
+                        <div class="exp-body">{html.escape(exp['especialidad_text'])}</div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
             if exp["cautions"]:
                 st.markdown("<div class='warn'><b>Precauciones de seguridad:</b><br>" + "<br>".join(exp["cautions"]) + "</div>", unsafe_allow_html=True)
@@ -569,7 +708,13 @@ def main() -> None:
 
         eta = st.slider("ETA estimada al hospital (min)", min_value=4, max_value=45, value=12)
 
-        if st.button("Publicar decision y notificar conductor", type="primary"):
+        c_send_1, c_send_2 = st.columns([1, 1], gap="small")
+        with c_send_1:
+            publish_primary = st.button("Mandar informacion al conductor", type="primary", use_container_width=True)
+        with c_send_2:
+            publish_secondary = st.button("Publicar decision y notificar conductor", use_container_width=True)
+
+        if publish_primary or publish_secondary:
             patch = {
                 "case": {
                     "summary": f"{final_urg} / {final_spec}",
@@ -585,6 +730,12 @@ def main() -> None:
                     "telefono": str(chosen_hosp.get("telefono", "")),
                     "email": str(chosen_hosp.get("email", "")),
                     "direccion": str(chosen_hosp.get("direccion_completa", "")),
+                    "especialidades": str(chosen_hosp.get("especialidades_texto", "")),
+                    "perfiles": str(chosen_hosp.get("perfiles_atencion", "")),
+                    "municipio": str(chosen_hosp.get("municipio", "")),
+                    "centro_tipo": str(chosen_hosp.get("centro_tipo", "")),
+                    "lat": float(chosen_hosp.get("lat", 0.0) or 0.0),
+                    "lon": float(chosen_hosp.get("lon", 0.0) or 0.0),
                     "eta_min": int(eta),
                 },
                 "traffic_alerts": selected_alerts,

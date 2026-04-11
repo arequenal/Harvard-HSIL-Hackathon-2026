@@ -28,14 +28,16 @@ PROCESSED_HOSPITALES_PATH = (
 SAMUR_BASES_PATH = PROJECT_ROOT / "analisis_datos" / "data" / "processed" / "bases_samur_madrid.csv"
 
 
-@st.cache_resource
 def load_operator_service_embedded() -> Any:
     """Importa operator_service sin aplicar efectos globales de estilo/config."""
 
     original_set_page_config = st.set_page_config
     try:
         st.set_page_config = lambda *args, **kwargs: None  # type: ignore[assignment]
-        module = importlib.import_module("visual.operator_service")
+        if "visual.operator_service" in sys.modules:
+            module = importlib.reload(sys.modules["visual.operator_service"])
+        else:
+            module = importlib.import_module("visual.operator_service")
     finally:
         st.set_page_config = original_set_page_config
 
@@ -318,10 +320,21 @@ def map_build_operational_scenario(
     destination_id = str(destination.get("centro_id", "")).strip().upper()
     destination_name = str(destination.get("nombre", "")).strip().lower()
     specialty_name = str(case_info.get("especialidad", "")).strip()
+    urgency_value = case_info.get("urgencia", "")
 
     def _normalize_text(value: Any) -> str:
         normalized = unicodedata.normalize("NFKD", str(value))
         return "".join(ch for ch in normalized if not unicodedata.combining(ch)).lower().strip()
+
+    def _extract_level(value: Any) -> int | None:
+        text = str(value).strip()
+        try:
+            return int(float(text))
+        except Exception:
+            for ch in text:
+                if ch.isdigit():
+                    return int(ch)
+        return None
 
     specialty_candidates = pd.DataFrame()
     specialty_norm = _normalize_text(specialty_name)
@@ -329,6 +342,9 @@ def map_build_operational_scenario(
         specialty_candidates = hospitals_df[
             hospitals_df["especialidades_texto"].astype(str).apply(lambda text: specialty_norm in _normalize_text(text))
         ]
+
+    urgency_level = _extract_level(urgency_value)
+    is_level_4 = urgency_level == 4 or "nivel 4" in _normalize_text(urgency_value)
 
     candidate = pd.DataFrame()
     if destination_id:
@@ -365,10 +381,11 @@ def map_build_operational_scenario(
         return chosen_base, best_cost
 
     if candidate.empty:
-        # Funcion objetivo multicriterio para seleccionar hospital cuando no hay destino publicado.
-        # Minimiza tiempo, espera y ocupacion, y favorece hospitales con mas medicos.
+        # Regla de negocio:
+        # - Priorizar hospital mas cercano con la especialidad indicada.
+        # - Si no hay coincidencias de especialidad, usar hospital mas cercano sin filtro.
         best_idx = None
-        best_obj = None
+        best_cost = float("inf")
         origin_base = bases[0]
 
         search_space = specialty_candidates if not specialty_candidates.empty else hospitals_df
@@ -378,14 +395,8 @@ def map_build_operational_scenario(
             if travel_i == float("inf"):
                 continue
 
-            m = _metrics_for_row(row)
-            travel_min = travel_i / 550.0
-            if not specialty_candidates.empty:
-                objective = (travel_min, m["wait"], m["occ"], -m["doctors"])
-            else:
-                objective = ((0.52 * travel_min) + (0.26 * m["wait"]) + (0.20 * m["occ"]) - (0.42 * m["doctors"]),)
-            if best_obj is None or objective < best_obj:
-                best_obj = objective
+            if travel_i < best_cost:
+                best_cost = travel_i
                 best_idx = idx
                 origin_base = base_i
 
@@ -393,7 +404,7 @@ def map_build_operational_scenario(
         if not specialty_candidates.empty:
             status = f"Destino recomendado por especialidad y cercanía: {specialty_name}"
         else:
-            status = "Destino recomendado por funcion objetivo"
+            status = "Destino recomendado por cercanía (sin coincidencia de especialidad)"
     else:
         target_row = candidate.iloc[0]
         status = "Destino sincronizado con conductor"
@@ -577,8 +588,8 @@ def map_render_driver_map(
     <div id=\"map-attrib\">Based on real data</div>
     <div id=\"map\"></div>
   <script>
-    const map = L.map('map', {{ preferCanvas: true }}).setView([40.4168, -3.7038], 12.8);
-    L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_nolabels/{{z}}/{{x}}/{{y}}{{r}}.png', {{ attribution: '© CartoDB' }}).addTo(map);
+    const map = L.map('map', {{ preferCanvas: true }}).setView([40.4168, -3.7038], 13.8);
+    L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{ attribution: '© CartoDB' }}).addTo(map);
     const scenario  = {scenario_json};
     const bases     = {bases_json};
     const incidents = {incidents_json};
@@ -646,12 +657,10 @@ def map_render_driver_map(
         }}
         const routeBounds = routeLine.getBounds();
         if (routeBounds.isValid()) {{
-            map.fitBounds(routeBounds.pad(0.08), {{ maxZoom: 15 }});
+            map.fitBounds(routeBounds.pad(0.03), {{ maxZoom: 16.8 }});
             const diagKm = map.distance(routeBounds.getSouthWest(), routeBounds.getNorthEast()) / 1000;
-            if (diagKm > 45) {{
-                const start = route[0], end = route[route.length - 1];
-                const center = [ (start[0] + end[0]) / 2, (start[1] + end[1]) / 2 ];
-                map.setView(center, 12.5);
+            if (diagKm > 30) {{
+                map.setView(route[0], 14.6);
             }}
         }}
         const etaTotal=Math.max(2,Number(scenario.eta_min||8)), pasoAnimacion=4, tickMs=50;

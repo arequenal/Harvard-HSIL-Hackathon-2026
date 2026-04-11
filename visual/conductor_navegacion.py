@@ -5,6 +5,8 @@ import pandas as pd
 import random
 import json
 import sys
+import unicodedata
+from difflib import SequenceMatcher
 from pathlib import Path
 import streamlit.components.v1 as components
 
@@ -424,10 +426,45 @@ def _route_coords(route_nodes):
     return coords
 
 
+def _normalize_text(value: object) -> str:
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return " ".join(text.lower().strip().split())
+
+
+def _resolve_destination_candidate(df: pd.DataFrame, destination_id: str, destination_name: str) -> pd.DataFrame:
+    candidate = pd.DataFrame()
+
+    if destination_id:
+        id_norm = destination_id.strip().upper()
+        candidate = df[df["centro_id"].astype(str).str.strip().str.upper() == id_norm]
+        if not candidate.empty:
+            return candidate
+
+    if destination_name:
+        name_norm = _normalize_text(destination_name)
+        series_norm = df["nombre"].astype(str).apply(_normalize_text)
+
+        exact = df[series_norm.eq(name_norm)]
+        if not exact.empty:
+            return exact
+
+        contains = df[series_norm.str.contains(name_norm, regex=False)]
+        if not contains.empty:
+            return contains
+
+        scores = series_norm.apply(lambda n: SequenceMatcher(None, name_norm, n).ratio())
+        best_idx = scores.idxmax() if not scores.empty else None
+        if best_idx is not None and float(scores.loc[best_idx]) >= 0.56:
+            return df.loc[[best_idx]]
+
+    return candidate
+
+
 @st.cache_resource
 def startup_reset_once() -> bool:
-    # Reset shared operator-conductor state once per conductor app startup.
-    save_state(default_state())
+    # Ensure shared state file exists without overwriting operator updates.
+    load_state()
     return True
 
 
@@ -466,7 +503,7 @@ def render_state_debug(state: dict[str, object], destination_id: str, destinatio
             st.markdown(
                 '<p style="padding:0.55rem 0.4rem; font-family:\'JetBrains Mono\',monospace; '
                 'font-size:0.72rem; color:#4d6a85; letter-spacing:0.04em; margin:0;">'
-                '// Estado se refresca al pulsar Sincronizar o cuando el operador publica una nueva orden</p>',
+                '// Estado se refresca al pulsar Sincronizar. En espera SOS, auto-sync silencioso en segundo plano.</p>',
                 unsafe_allow_html=True,
             )
 
@@ -516,6 +553,30 @@ def render_state_debug(state: dict[str, object], destination_id: str, destinatio
         st.markdown('</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
+        destination_payload = state.get("destination", {}) if isinstance(state.get("destination", {}), dict) else {}
+        extra_cols = st.columns(3, gap="small")
+        with extra_cols[0]:
+            st.markdown(
+                f'<div class="status-card" style="animation-delay:0.25s">'
+                f'<span class="status-label">// teléfono</span>'
+                f'<span class="status-value" style="font-size:0.82rem;">{str(destination_payload.get("telefono", "") or "—")}</span></div>',
+                unsafe_allow_html=True,
+            )
+        with extra_cols[1]:
+            st.markdown(
+                f'<div class="status-card" style="animation-delay:0.30s">'
+                f'<span class="status-label">// municipio</span>'
+                f'<span class="status-value" style="font-size:0.82rem;">{str(destination_payload.get("municipio", "") or "—")}</span></div>',
+                unsafe_allow_html=True,
+            )
+        with extra_cols[2]:
+            st.markdown(
+                f'<div class="status-card" style="animation-delay:0.35s">'
+                f'<span class="status-label">// centro tipo</span>'
+                f'<span class="status-value" style="font-size:0.82rem;">{str(destination_payload.get("centro_tipo", "") or "—")}</span></div>',
+                unsafe_allow_html=True,
+            )
+
         with st.expander("// ver estado JSON completo"):
             st.json(state)
 
@@ -531,21 +592,15 @@ if "startup_session_init" not in st.session_state:
 state = load_state()
 destination_id = str(state.get("destination", {}).get("centro_id", "")).strip()
 destination_name = str(state.get("destination", {}).get("nombre", "")).strip()
+destination_payload = state.get("destination", {}) if isinstance(state.get("destination", {}), dict) else {}
 traffic_alerts = [str(a) for a in state.get("traffic_alerts", []) if str(a).strip()]
 active_sos = get_active_sos()
 render_state_debug(state, destination_id, destination_name, traffic_alerts)
 
-candidate = pd.DataFrame()
-if destination_id:
-    candidate = df_hospitales[df_hospitales["centro_id"].astype(str).str.strip().str.upper() == destination_id.upper()]
-if candidate.empty and destination_name:
-    name_norm = destination_name.lower().strip()
-    candidate = df_hospitales[
-        df_hospitales["nombre"].astype(str).str.lower().str.strip().eq(name_norm)
-        | df_hospitales["nombre"].astype(str).str.lower().str.contains(name_norm, regex=False)
-    ]
-
-has_destination = (not candidate.empty) and (destination_id or destination_name)
+candidate = _resolve_destination_candidate(df_hospitales, destination_id, destination_name)
+has_destination_signal = bool(destination_id or destination_name)
+has_destination_coords = destination_payload.get("lat") is not None and destination_payload.get("lon") is not None
+has_destination = (not candidate.empty or has_destination_coords) and has_destination_signal
 was_waiting_at_sos = bool(st.session_state.get("ambulance_waiting_at_sos", False))
 route_status = "Ruta en curso: ambulancia desplazandose a la señal SOS."
 route_to_sos = []
@@ -578,8 +633,18 @@ selected_hospital_info = {
 }
 
 if has_destination:
-    selected_hospital = candidate.iloc[0]
-    selected_target = int(selected_hospital['nodo_red'])
+    if not candidate.empty:
+        selected_hospital = candidate.iloc[0]
+        selected_target = int(selected_hospital['nodo_red'])
+    else:
+        selected_hospital = None
+        selected_target = int(
+            ox.distance.nearest_nodes(
+                grafo,
+                X=float(destination_payload.get("lon")),
+                Y=float(destination_payload.get("lat")),
+            )
+        )
     route_nodes = _route_nodes(int(active_sos['nodo_red']), selected_target)
     if was_waiting_at_sos:
         route_status = "Orden recibida: salida inmediata desde SOS hacia el hospital indicado por operador."
@@ -593,22 +658,41 @@ if has_destination:
         route_status = "No existe una ruta conectada entre SOS y hospital. Se muestra una traza directa para el segundo tramo."
         route_to_hospital = []
 
+    dest_lat = float(selected_hospital['lat']) if selected_hospital is not None else float(destination_payload.get("lat"))
+    dest_lon = float(selected_hospital['lon']) if selected_hospital is not None else float(destination_payload.get("lon"))
+
     if len(route_to_hospital) < 2:
-        route_to_hospital = [[float(active_sos['lat']), float(active_sos['lon'])], [float(selected_hospital['lat']), float(selected_hospital['lon'])]]
+        route_to_hospital = [[float(active_sos['lat']), float(active_sos['lon'])], [dest_lat, dest_lon]]
         if route_status == "Ruta en dos tramos: base → SOS y SOS → hospital indicado por operador.":
             route_status = "El tramo SOS → hospital se dibuja en modo directo."
     else:
-        final_hospital_point = [float(selected_hospital['lat']), float(selected_hospital['lon'])]
+        final_hospital_point = [dest_lat, dest_lon]
         if route_to_hospital[-1] != final_hospital_point:
             route_to_hospital.append(final_hospital_point)
 
     selected_hospital_info = {
-        "nombre": str(selected_hospital.get("nombre", destination_name or "Hospital destino")),
-        "lat": float(selected_hospital["lat"]),
-        "lon": float(selected_hospital["lon"]),
-        "direccion": str(selected_hospital.get("direccion_completa", state.get("destination", {}).get("direccion", "") ) or ""),
-        "especialidades": str(selected_hospital.get("especialidades_texto", "") or ""),
-        "perfiles": str(selected_hospital.get("perfiles_atencion", "") or ""),
+        "nombre": str(
+            (selected_hospital.get("nombre", "") if selected_hospital is not None else destination_payload.get("nombre", ""))
+            or destination_name
+            or "Hospital destino"
+        ),
+        "lat": dest_lat,
+        "lon": dest_lon,
+        "direccion": str(
+            (selected_hospital.get("direccion_completa", "") if selected_hospital is not None else destination_payload.get("direccion", ""))
+            or destination_payload.get("direccion", "")
+            or ""
+        ),
+        "especialidades": str(
+            (selected_hospital.get("especialidades_texto", "") if selected_hospital is not None else destination_payload.get("especialidades", ""))
+            or destination_payload.get("especialidades", "")
+            or ""
+        ),
+        "perfiles": str(
+            (selected_hospital.get("perfiles_atencion", "") if selected_hospital is not None else destination_payload.get("perfiles", ""))
+            or destination_payload.get("perfiles", "")
+            or ""
+        ),
         "occ": random.randint(30, 98),
         "wait": random.randint(10, 120),
     }
@@ -617,7 +701,7 @@ if has_destination:
 if destination_id and destination_name and candidate.empty:
     route_status = "Destino recibido pero no localizado en la base; la ambulancia llega al SOS y espera nueva orden del operador."
 
-if not has_destination and not (destination_id or destination_name):
+if not has_destination and not has_destination_signal:
     if was_waiting_at_sos:
         route_status = "Ambulancia en punto SOS, esperando orden del operador."
         route_to_sos = [[float(active_sos['lat']), float(active_sos['lon'])], [float(active_sos['lat']), float(active_sos['lon'])]]
@@ -625,7 +709,65 @@ if not has_destination and not (destination_id or destination_name):
         route_status = "Ruta en curso: base → SOS. Al llegar al SOS, la ambulancia quedara esperando la orden del operador."
     st.session_state["ambulance_waiting_at_sos"] = True
 
-auto_refresh_waiting = bool(st.session_state.get("ambulance_waiting_at_sos", False)) and not has_destination
+auto_refresh_waiting = bool(st.session_state.get("ambulance_waiting_at_sos", False)) and not has_destination_signal
+
+if auto_refresh_waiting:
+    # Discreet waiting mode: trigger Streamlit sync button in background.
+    components.html(
+        """
+        <script>
+        (function() {
+            try {
+                if (window.parent.__conductorAutoReloadTimer) {
+                    clearInterval(window.parent.__conductorAutoReloadTimer);
+                }
+
+                const syncIfVisible = () => {
+                    try {
+                        if (window.parent.document.visibilityState !== 'visible') return;
+
+                        const btns = Array.from(window.parent.document.querySelectorAll('button'));
+                        const syncBtn = btns.find((b) => /sincronizar/i.test((b.innerText || '').trim()));
+
+                        if (syncBtn) {
+                            syncBtn.click();
+                            return;
+                        }
+
+                        // Rare fallback if the button is temporarily unavailable.
+                        const now = Date.now();
+                        const lastHard = Number(window.parent.sessionStorage.getItem('conductorLastHardReloadAt') || '0');
+                        if (now - lastHard > 15000) {
+                            window.parent.sessionStorage.setItem('conductorLastHardReloadAt', String(now));
+                            window.parent.sessionStorage.setItem('conductorScrollY', String(window.parent.scrollY || 0));
+                            window.parent.location.reload();
+                        }
+                    } catch (e) {}
+                };
+
+                window.parent.__conductorAutoReloadTimer = window.setInterval(syncIfVisible, 250);
+            } catch (e) {}
+        })();
+        </script>
+        """,
+        height=0,
+    )
+else:
+    components.html(
+        """
+        <script>
+        (function() {
+            try {
+                if (window.parent.__conductorAutoReloadTimer) {
+                    clearInterval(window.parent.__conductorAutoReloadTimer);
+                    window.parent.__conductorAutoReloadTimer = null;
+                }
+            } catch (e) {}
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
 st.info(route_status)
 
@@ -649,6 +791,7 @@ operativo = {
     "destino": selected_hospital_info,
     "origen": selected_base,
     "sos": active_sos,
+    "was_waiting_at_sos": was_waiting_at_sos,
     "esperando_destino": not has_destination,
     "auto_refresh_waiting": auto_refresh_waiting,
     "mensaje": f"<b>Señal SOS activa</b><br>{active_sos['nombre']}<br>La ambulancia acudira primero al SOS y despues al hospital indicado",
@@ -784,20 +927,13 @@ html_crudo = """
                 }, Math.max(0, softSyncUntil - Date.now()) + 220);
                 window.parent.sessionStorage.removeItem('conductorSyncUntil');
             }
+
             const savedY = window.parent.sessionStorage.getItem('conductorScrollY');
             if (savedY !== null) {
                 window.parent.scrollTo(0, parseInt(savedY, 10));
                 window.parent.sessionStorage.removeItem('conductorScrollY');
             }
         } catch (e) {}
-
-        zonasTrafico.forEach(function(zona) {
-            if (zona.nivel === "Bajo") return;
-            const color = zona.nivel === "Alto" ? '#ff4757' : '#f5a623';
-            L.circle([zona.lat, zona.lon], { radius: zona.radio, color: color, fillColor: color, fillOpacity: 0.10, weight: 1, opacity: 0.30 })
-              .bindTooltip("🚥 Tráfico: <b>" + zona.nivel + "</b>", { direction: 'center', className: 'custom-tip traffic-tip' })
-              .addTo(map);
-        });
 
         ambulatorios.forEach(function(a) {
             const icon = L.divIcon({className: 'ambu-marker', html: '🩺', iconSize: [26,26], iconAnchor: [13,13]});
@@ -937,28 +1073,28 @@ html_crudo = """
 
                 function triggerParentSync() {
                     try {
+                        const now = Date.now();
+                        const nextAllowed = Number(window.parent.sessionStorage.getItem('conductorNextSyncAt') || '0');
+                        if (now < nextAllowed) return;
+
+                        // Ultra-fast polling while waiting for operator approval.
+                        window.parent.sessionStorage.setItem('conductorNextSyncAt', String(now + 800));
                         window.parent.sessionStorage.setItem('conductorScrollY', String(window.parent.scrollY || 0));
-                        window.parent.sessionStorage.setItem('conductorSyncUntil', String(Date.now() + 600));
+
+                        // Short darkening pulse to communicate incoming sync.
+                        window.parent.sessionStorage.setItem('conductorSyncUntil', String(now + 320));
                         window.parent.document.body.classList.add('conductor-soft-sync');
                         window.setTimeout(() => {
                             try {
                                 window.parent.document.body.classList.remove('conductor-soft-sync');
                             } catch (e) {}
-                        }, 750);
+                        }, 360);
                     } catch (e) {}
 
                     try {
                         const btns = Array.from(window.parent.document.querySelectorAll('button'));
                         const syncBtn = btns.find((b) => (b.innerText || '').trim().includes('Sincronizar'));
-                        if (syncBtn) {
-                            syncBtn.click();
-                            return;
-                        }
-                    } catch (e) {}
-
-                    // Reload only if we cannot trigger a soft Streamlit rerun.
-                    try {
-                        window.parent.location.reload();
+                        if (syncBtn) syncBtn.click();
                     } catch (e) {}
                 }
 
@@ -972,7 +1108,7 @@ html_crudo = """
                             if (op.auto_refresh_waiting) {
                                 setTimeout(() => {
                                     triggerParentSync();
-                                }, 1500);
+                                }, 700);
                             }
                             return;
                         }
