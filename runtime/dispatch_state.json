@@ -1,6 +1,6 @@
 {
-  "version": 6,
-  "updated_at": "2026-04-11T01:11:29.522518+00:00",
+  "version": 3,
+  "updated_at": "2026-04-11T08:19:09.230029+00:00",
   "case": {
     "summary": "Nivel 4 - Muy urgente / Medicina intensiva",
     "source_text": "paciente varón de 67 anos con dolor toracico oppresivo. Disney a presión arterial 178 sobre 102. Saturación 90 y Glasswo 13.",
@@ -29,9 +29,9 @@
   "operator_notes": "",
   "navigation": {
     "sos": {
-      "nombre": "SOS Retiro",
-      "lat": 40.4166,
-      "lon": -3.6844
+      "nombre": "SOS Cuatro Caminos",
+      "lat": 40.4473,
+      "lon": -3.7033
     }
   }
 }

@@ -5,6 +5,7 @@ import pandas as pd
 import random
 import json
 import sys
+import time
 import unicodedata
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -296,9 +297,7 @@ st.markdown("""
 
         /* ── SOFT SYNC ── */
         body.conductor-soft-sync {
-            opacity: 0.88;
-            filter: saturate(0.9) brightness(0.97);
-            transition: opacity 180ms ease, filter 180ms ease;
+            transition: opacity 80ms ease;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -500,337 +499,386 @@ def startup_reset_once() -> bool:
     return True
 
 
-def render_state_debug(state: dict[str, object], destination_id: str, destination_name: str, traffic_alerts: list[str]) -> None:
-    with st.container():
-        alert_count = len(traffic_alerts)
-        alert_color = "#f5a623" if alert_count else "#4d6a85"
-        alert_label = f"{alert_count} ALERTA{'S' if alert_count != 1 else ''}" if alert_count else "SIN ALERTAS"
-        dest_display = destination_name or destination_id or "ESPERANDO OPERADOR"
+# ── Sincronización: un único fragment ligero detecta cambios de versión
+# y dispara st.rerun() solo cuando el estado operativo cambia de verdad.
+SYNC_INTERVAL_SECONDS = 2
 
-        st.markdown(
-            f"""
-            <div class="hero-shell">
-                <h1>Ambulanc<span>IA</span> · Conductor</h1>
-                <p>Ruta operativa en tiempo real · Sincronización con operador · Red vial de Madrid</p>
-                <div style="margin-top:12px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
-                    <span class="status-chip"><span class="live-dot"></span>EN VIVO</span>
-                    <span class="status-chip">RED VIAL</span>
-                    <span class="status-chip" style="color:{alert_color}; border-color:{alert_color}33;">⚠ {alert_label}</span>
-                    <span class="status-chip" style="color:#00e896; border-color:#00e89633;">↗ {dest_display[:32]}</span>
-                </div>
+
+def _state_sig(state: dict) -> str:
+    """Firma compacta del estado: cambia solo cuando el operador publica algo nuevo."""
+    dest = state.get("destination", {}) or {}
+    return (
+        f"{state.get('version', 0)}"
+        f"|{dest.get('centro_id', '')}"
+        f"|{dest.get('nombre', '')}"
+        f"|{dest.get('lat', '')}"
+        f"|{dest.get('lon', '')}"
+    )
+
+
+@st.fragment(run_every=SYNC_INTERVAL_SECONDS)
+def _sync_watcher() -> None:
+    """Fragment ligero: solo lee estado y dispara rerun completo si cambió la versión."""
+    live = load_state()
+    sig = _state_sig(live)
+    if sig != st.session_state.get("_last_state_sig", ""):
+        st.session_state["_last_state_sig"] = sig
+        st.session_state.pop("_route_cache", None)  # invalidar caché de rutas
+        st.rerun()
+
+
+def render_state_debug(state: dict) -> None:
+    """Panel de estado – renderizado normal, sin run_every propio."""
+    dest = state.get("destination", {}) or {}
+    destination_id   = str(dest.get("centro_id", "")).strip()
+    destination_name = str(dest.get("nombre", "")).strip()
+    traffic_alerts   = [str(a) for a in state.get("traffic_alerts", []) if str(a).strip()]
+
+    alert_count  = len(traffic_alerts)
+    alert_color  = "#f5a623" if alert_count else "#4d6a85"
+    alert_label  = f"{alert_count} ALERTA{'S' if alert_count != 1 else ''}" if alert_count else "SIN ALERTAS"
+    dest_display = destination_name or destination_id or "ESPERANDO OPERADOR"
+
+    st.markdown(
+        f"""
+        <div class="hero-shell">
+            <h1>Ambulanc<span>IA</span> · Conductor</h1>
+            <p>Ruta operativa en tiempo real · Sincronización automática con operador · Red vial de Madrid</p>
+            <div style="margin-top:12px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+                <span class="status-chip"><span class="live-dot"></span>EN VIVO</span>
+                <span class="status-chip">RED VIAL</span>
+                <span class="status-chip" style="color:{alert_color}; border-color:{alert_color}33;">⚠ {alert_label}</span>
+                <span class="status-chip" style="color:#00e896; border-color:#00e89633;">↗ {dest_display[:32]}</span>
             </div>
-            """,
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    col_reset, col_hint = st.columns([1, 5], gap="small")
+    with col_reset:
+        if st.button("↺  Reset", type="secondary", use_container_width=True):
+            reset_operativo()
+            st.rerun()
+    with col_hint:
+        st.markdown(
+            f'<p style="padding:0.55rem 0.4rem; font-family:\'JetBrains Mono\',monospace; '
+            f'font-size:0.72rem; color:#4d6a85; letter-spacing:0.04em; margin:0;">'
+            f'// Auto-sync cada {SYNC_INTERVAL_SECONDS}s · El mapa se actualiza al recibir destino del operador.</p>',
             unsafe_allow_html=True,
         )
 
-        col_sync, col_reset, col_hint = st.columns([1, 1, 4], gap="small")
-        with col_sync:
-            if st.button("⟳  Sincronizar", type="primary", use_container_width=True):
-                st.rerun()
-        with col_reset:
-            if st.button("↺  Reset", type="secondary", use_container_width=True):
-                reset_operativo()
-                st.rerun()
-        with col_hint:
-            st.markdown(
-                '<p style="padding:0.55rem 0.4rem; font-family:\'JetBrains Mono\',monospace; '
-                'font-size:0.72rem; color:#4d6a85; letter-spacing:0.04em; margin:0;">'
-                '// Estado se refresca al pulsar Sincronizar. En espera SOS, auto-sync silencioso en segundo plano.</p>',
-                unsafe_allow_html=True,
-            )
+    updated_at  = str(state.get("updated_at", "-"))[:19].replace("T", " ")
+    version_val = state.get("version", 0)
 
-        updated_at = str(state.get("updated_at", "-"))[:19].replace("T", " ")
-        version_val = state.get("version", 0)
+    st.markdown('<div class="state-strip">', unsafe_allow_html=True)
+    st.markdown('<div class="panel-title">▸ Estado compartido</div>', unsafe_allow_html=True)
+    c1, c2, c3, c4 = st.columns(4, gap="small")
+    with c1:
+        st.markdown(
+            f'<div class="status-card" style="animation-delay:0.05s">'
+            f'<span class="status-label">// versión</span>'
+            f'<span class="status-value">v{version_val}</span></div>',
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown(
+            f'<div class="status-card" style="animation-delay:0.10s">'
+            f'<span class="status-label">// actualizado</span>'
+            f'<span class="status-value" style="font-size:0.82rem;">{updated_at}</span></div>',
+            unsafe_allow_html=True,
+        )
+    with c3:
+        st.markdown(
+            f'<div class="status-card" style="animation-delay:0.15s">'
+            f'<span class="status-label">// id destino</span>'
+            f'<span class="status-value">{destination_id or "—"}</span></div>',
+            unsafe_allow_html=True,
+        )
+    with c4:
+        st.markdown(
+            f'<div class="status-card" style="animation-delay:0.20s">'
+            f'<span class="status-label">// nombre destino</span>'
+            f'<span class="status-value" style="font-size:0.82rem;">{destination_name or "—"}</span></div>',
+            unsafe_allow_html=True,
+        )
 
-        st.markdown('<div class="state-strip">', unsafe_allow_html=True)
-        st.markdown('<div class="panel-title">▸ Estado compartido</div>', unsafe_allow_html=True)
-        c1, c2, c3, c4 = st.columns(4, gap="small")
-        with c1:
-            st.markdown(
-                f'<div class="status-card" style="animation-delay:0.05s">'
-                f'<span class="status-label">// versión</span>'
-                f'<span class="status-value">v{version_val}</span></div>',
-                unsafe_allow_html=True,
-            )
-        with c2:
-            st.markdown(
-                f'<div class="status-card" style="animation-delay:0.10s">'
-                f'<span class="status-label">// actualizado</span>'
-                f'<span class="status-value" style="font-size:0.82rem;">{updated_at}</span></div>',
-                unsafe_allow_html=True,
-            )
-        with c3:
-            st.markdown(
-                f'<div class="status-card" style="animation-delay:0.15s">'
-                f'<span class="status-label">// id destino</span>'
-                f'<span class="status-value">{destination_id or "—"}</span></div>',
-                unsafe_allow_html=True,
-            )
-        with c4:
-            st.markdown(
-                f'<div class="status-card" style="animation-delay:0.20s">'
-                f'<span class="status-label">// nombre destino</span>'
-                f'<span class="status-value" style="font-size:0.82rem;">{destination_name or "—"}</span></div>',
-                unsafe_allow_html=True,
-            )
+    st.markdown('<div class="state-meta">', unsafe_allow_html=True)
+    st.markdown('<span class="state-pill">● AUTO-SYNC ACTIVO</span>', unsafe_allow_html=True)
+    st.markdown('<span class="state-pill">◈ RUTA RED VIAL</span>', unsafe_allow_html=True)
+    if traffic_alerts:
+        for a in traffic_alerts:
+            st.markdown(f'<span class="alert-chip">⚠ {a}</span>', unsafe_allow_html=True)
+    else:
+        st.markdown('<span class="alert-chip alert-chip--none">✓ sin alertas de tráfico</span>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-        st.markdown('<div class="state-meta">', unsafe_allow_html=True)
-        st.markdown('<span class="state-pill">● SYNC ACTIVO</span>', unsafe_allow_html=True)
-        st.markdown('<span class="state-pill">◈ RUTA RED VIAL</span>', unsafe_allow_html=True)
-        if traffic_alerts:
-            for a in traffic_alerts:
-                st.markdown(f'<span class="alert-chip">⚠ {a}</span>', unsafe_allow_html=True)
+    dest_payload = dest
+    extra_cols = st.columns(3, gap="small")
+    with extra_cols[0]:
+        st.markdown(
+            f'<div class="status-card" style="animation-delay:0.25s">'
+            f'<span class="status-label">// teléfono</span>'
+            f'<span class="status-value" style="font-size:0.82rem;">{str(dest_payload.get("telefono", "") or "—")}</span></div>',
+            unsafe_allow_html=True,
+        )
+    with extra_cols[1]:
+        st.markdown(
+            f'<div class="status-card" style="animation-delay:0.30s">'
+            f'<span class="status-label">// municipio</span>'
+            f'<span class="status-value" style="font-size:0.82rem;">{str(dest_payload.get("municipio", "") or "—")}</span></div>',
+            unsafe_allow_html=True,
+        )
+    with extra_cols[2]:
+        st.markdown(
+            f'<div class="status-card" style="animation-delay:0.35s">'
+            f'<span class="status-label">// centro tipo</span>'
+            f'<span class="status-value" style="font-size:0.82rem;">{str(dest_payload.get("centro_tipo", "") or "—")}</span></div>',
+            unsafe_allow_html=True,
+        )
+
+    with st.expander("// ver estado JSON completo"):
+        st.json(state)
+
+
+def _build_route_data(state: dict, active_sos: dict) -> dict:
+    """Calcula rutas y selecciona hospital. Usa caché de session_state si el estado no cambió.
+
+    Clave de caché incluye: id, nombre, lat, lon del destino + nombre, lat, lon del SOS.
+    """
+    dest = state.get("destination", {}) or {}
+    destination_id   = str(dest.get("centro_id", "")).strip()
+    destination_name = str(dest.get("nombre", "")).strip()
+    destination_payload = dest
+
+    # Clave robusta: cubre cambio de coordenadas aunque el nombre no cambie
+    _cache_key = (
+        f"{destination_id}|{destination_name}"
+        f"|{dest.get('lat', '')}|{dest.get('lon', '')}"
+        f"|{active_sos['nombre']}|{active_sos['lat']}|{active_sos['lon']}"
+    )
+    _route_cache = st.session_state.get("_route_cache", {})
+
+    # Devolver caché si la clave no ha cambiado
+    if _route_cache.get("key") == _cache_key:
+        return _route_cache
+
+    # ── Recalcular ──────────────────────────────────────────────────────────
+    candidate = _resolve_destination_candidate(df_hospitales, destination_id, destination_name)
+    has_destination_signal = bool(destination_id or destination_name)
+    has_destination_coords = dest.get("lat") is not None and dest.get("lon") is not None
+    has_destination = (not candidate.empty or has_destination_coords) and has_destination_signal
+    was_waiting_at_sos = bool(st.session_state.get("ambulance_waiting_at_sos", False))
+
+    route_status    = "Ruta en curso: ambulancia desplazandose a la señal SOS."
+    route_to_sos    = []
+    route_to_hospital = []
+    selected_hospital = None
+    selected_base   = _best_base_to_target(int(active_sos['nodo_red']))
+
+    # Tramo 1: base → SOS
+    route_nodes_to_sos = _route_nodes(int(selected_base['nodo_red']), int(active_sos['nodo_red']))
+    if route_nodes_to_sos:
+        route_to_sos = _route_coords(route_nodes_to_sos)
+    else:
+        route_to_sos = [[float(selected_base['lat']), float(selected_base['lon'])],
+                        [float(active_sos['lat']), float(active_sos['lon'])]]
+
+    if len(route_to_sos) < 2:
+        route_to_sos = [[float(selected_base['lat']), float(selected_base['lon'])],
+                        [float(active_sos['lat']), float(active_sos['lon'])]]
+    else:
+        final_sos_point = [float(active_sos['lat']), float(active_sos['lon'])]
+        if route_to_sos[-1] != final_sos_point:
+            route_to_sos.append(final_sos_point)
+
+    selected_hospital_info = {
+        "nombre": "Destino pendiente por operador",
+        "lat": float(active_sos["lat"]),
+        "lon": float(active_sos["lon"]),
+        "direccion": "", "especialidades": "", "perfiles": "",
+        "occ": random.randint(30, 98),
+        "wait": random.randint(10, 120),
+    }
+
+    # Tramo 2: SOS → hospital (solo si el operador ya envió destino)
+    if has_destination:
+        if not candidate.empty:
+            selected_hospital = candidate.iloc[0]
+            selected_target   = int(selected_hospital['nodo_red'])
         else:
-            st.markdown('<span class="alert-chip alert-chip--none">✓ sin alertas de tráfico</span>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+            selected_hospital = None
+            selected_target   = int(ox.distance.nearest_nodes(
+                grafo, X=float(destination_payload.get("lon")), Y=float(destination_payload.get("lat"))
+            ))
 
-        destination_payload = state.get("destination", {}) if isinstance(state.get("destination", {}), dict) else {}
-        extra_cols = st.columns(3, gap="small")
-        with extra_cols[0]:
-            st.markdown(
-                f'<div class="status-card" style="animation-delay:0.25s">'
-                f'<span class="status-label">// teléfono</span>'
-                f'<span class="status-value" style="font-size:0.82rem;">{str(destination_payload.get("telefono", "") or "—")}</span></div>',
-                unsafe_allow_html=True,
-            )
-        with extra_cols[1]:
-            st.markdown(
-                f'<div class="status-card" style="animation-delay:0.30s">'
-                f'<span class="status-label">// municipio</span>'
-                f'<span class="status-value" style="font-size:0.82rem;">{str(destination_payload.get("municipio", "") or "—")}</span></div>',
-                unsafe_allow_html=True,
-            )
-        with extra_cols[2]:
-            st.markdown(
-                f'<div class="status-card" style="animation-delay:0.35s">'
-                f'<span class="status-label">// centro tipo</span>'
-                f'<span class="status-value" style="font-size:0.82rem;">{str(destination_payload.get("centro_tipo", "") or "—")}</span></div>',
-                unsafe_allow_html=True,
-            )
+        route_nodes = _route_nodes(int(active_sos['nodo_red']), selected_target)
 
-        with st.expander("// ver estado JSON completo"):
-            st.json(state)
+        if was_waiting_at_sos:
+            route_status  = "Orden recibida: salida inmediata desde SOS hacia el hospital indicado por operador."
+            route_to_sos  = [[float(active_sos['lat']), float(active_sos['lon'])],
+                             [float(active_sos['lat']), float(active_sos['lon'])]]
+        else:
+            route_status  = "Ruta en dos tramos: base → SOS y SOS → hospital indicado por operador."
+
+        if route_nodes:
+            route_to_hospital = _route_coords(route_nodes)
+        else:
+            route_status      = "No existe ruta conectada entre SOS y hospital. Traza directa para el segundo tramo."
+            route_to_hospital = []
+
+        dest_lat = float(selected_hospital['lat']) if selected_hospital is not None else float(destination_payload.get("lat"))
+        dest_lon = float(selected_hospital['lon']) if selected_hospital is not None else float(destination_payload.get("lon"))
+
+        if len(route_to_hospital) < 2:
+            route_to_hospital = [[float(active_sos['lat']), float(active_sos['lon'])], [dest_lat, dest_lon]]
+            if route_status == "Ruta en dos tramos: base → SOS y SOS → hospital indicado por operador.":
+                route_status = "El tramo SOS → hospital se dibuja en modo directo."
+        else:
+            final_hospital_point = [dest_lat, dest_lon]
+            if route_to_hospital[-1] != final_hospital_point:
+                route_to_hospital.append(final_hospital_point)
+
+        selected_hospital_info = {
+            "nombre": str(
+                (selected_hospital.get("nombre", "") if selected_hospital is not None
+                 else destination_payload.get("nombre", ""))
+                or destination_name or "Hospital destino"
+            ),
+            "lat": dest_lat, "lon": dest_lon,
+            "direccion": str(
+                (selected_hospital.get("direccion_completa", "") if selected_hospital is not None
+                 else destination_payload.get("direccion", ""))
+                or destination_payload.get("direccion", "") or ""
+            ),
+            "especialidades": str(
+                (selected_hospital.get("especialidades_texto", "") if selected_hospital is not None
+                 else destination_payload.get("especialidades", ""))
+                or destination_payload.get("especialidades", "") or ""
+            ),
+            "perfiles": str(
+                (selected_hospital.get("perfiles_atencion", "") if selected_hospital is not None
+                 else destination_payload.get("perfiles", ""))
+                or destination_payload.get("perfiles", "") or ""
+            ),
+            "occ": random.randint(30, 98),
+            "wait": random.randint(10, 120),
+        }
+        st.session_state["ambulance_waiting_at_sos"] = False
+
+    if destination_id and destination_name and candidate.empty:
+        route_status = "Destino recibido pero no localizado; la ambulancia espera en SOS nueva orden del operador."
+
+    if not has_destination and not has_destination_signal:
+        if was_waiting_at_sos:
+            route_status  = "Ambulancia en punto SOS, esperando orden del operador."
+            route_to_sos  = [[float(active_sos['lat']), float(active_sos['lon'])],
+                             [float(active_sos['lat']), float(active_sos['lon'])]]
+        else:
+            route_status  = "Ruta en curso: base → SOS. Al llegar al SOS, la ambulancia esperara la orden del operador."
+        st.session_state["ambulance_waiting_at_sos"] = True
+
+    # Guardar en caché para ticks sin cambio de estado
+    result = {
+        "key": _cache_key,
+        "route_status": route_status,
+        "route_to_sos": route_to_sos,
+        "route_to_hospital": route_to_hospital,
+        "selected_hospital_info": selected_hospital_info,
+        "selected_base": selected_base,
+        "has_destination": has_destination,
+        "was_waiting_at_sos": was_waiting_at_sos,
+        "traffic_alerts": [str(a) for a in state.get("traffic_alerts", []) if str(a).strip()],
+    }
+    st.session_state["_route_cache"] = result
+    return result
 
 
-# Reset automatico al iniciar el conductor (una vez por arranque del proceso).
+def render_mapa(rd: dict) -> None:
+    """Renderiza el mapa Leaflet – llamada normal, sin run_every propio."""
+    route_status        = rd["route_status"]
+    route_to_sos        = rd["route_to_sos"]
+    route_to_hospital   = rd["route_to_hospital"]
+    selected_hospital_info = rd["selected_hospital_info"]
+    selected_base       = rd["selected_base"]
+    has_destination     = rd["has_destination"]
+    was_waiting_at_sos  = rd["was_waiting_at_sos"]
+    traffic_alerts      = rd["traffic_alerts"]
+
+    st.info(route_status)
+
+    operativo = {
+        "hospitales": [
+            {
+                "nombre": str(row.get("nombre", "Hospital")),
+                "lat": float(row["lat"]),
+                "lon": float(row["lon"]),
+                "nodo_red": int(row["nodo_red"]),
+                "direccion": str(row.get("direccion_completa", "") or ""),
+                "especialidades": str(row.get("especialidades_texto", "") or ""),
+                "perfiles": str(row.get("perfiles_atencion", "") or ""),
+                "occ": random.randint(35, 98),
+                "wait": random.randint(8, 125),
+            }
+            for _, row in df_hospitales.iterrows()
+        ],
+        "gps_sos": route_to_sos,
+        "gps_ida": route_to_hospital,
+        "destino": selected_hospital_info,
+        "origen": selected_base,
+        "sos": active_sos,
+        "was_waiting_at_sos": was_waiting_at_sos,
+        "esperando_destino": not has_destination,
+        "mensaje": (
+            f"<b>Señal SOS activa</b><br>{active_sos['nombre']}"
+            "<br>La ambulancia acudira primero al SOS y despues al hospital indicado"
+        ),
+    }
+
+    ambu_json      = json.dumps(AMBULATORIOS)
+    zonas_json     = json.dumps(ZONAS_TRAFICO)
+    operativos_json = json.dumps([operativo])
+    alerts_json    = json.dumps(
+        traffic_alerts if traffic_alerts
+        else ["Atasco moderado en la vía principal", "Obras puntuales en acceso secundario"]
+    )
+
+    html_mapa = (
+        html_crudo
+        .replace("__AMBULATORIOS__", ambu_json)
+        .replace("__ZONAS_TRAFICO__", zonas_json)
+        .replace("__OPERATIVOS__", operativos_json)
+        .replace("__ALERTS__", alerts_json)
+    )
+
+    st.markdown('<div class="map-wrap">', unsafe_allow_html=True)
+    components.html(html_mapa, height=1000)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ── Arranque ──────────────────────────────────────────────────────────────────
 startup_reset_once()
 if "startup_session_init" not in st.session_state:
     st.session_state.pop("active_sos", None)
     st.session_state.pop("ambulance_waiting_at_sos", None)
     st.session_state["startup_session_init"] = True
 
-# Leer destino real publicado por el operador
-state = load_state()
-destination_id = str(state.get("destination", {}).get("centro_id", "")).strip()
-destination_name = str(state.get("destination", {}).get("nombre", "")).strip()
-destination_payload = state.get("destination", {}) if isinstance(state.get("destination", {}), dict) else {}
-traffic_alerts = [str(a) for a in state.get("traffic_alerts", []) if str(a).strip()]
-active_sos = get_active_sos()
-_publish_active_sos_if_changed(state, active_sos)
-render_state_debug(state, destination_id, destination_name, traffic_alerts)
+# Una única lectura de estado por ciclo de ejecución completo
+shared_state = load_state()
+active_sos   = get_active_sos()
+_publish_active_sos_if_changed(shared_state, active_sos)
 
-candidate = _resolve_destination_candidate(df_hospitales, destination_id, destination_name)
-has_destination_signal = bool(destination_id or destination_name)
-has_destination_coords = destination_payload.get("lat") is not None and destination_payload.get("lon") is not None
-has_destination = (not candidate.empty or has_destination_coords) and has_destination_signal
-was_waiting_at_sos = bool(st.session_state.get("ambulance_waiting_at_sos", False))
-route_status = "Ruta en curso: ambulancia desplazandose a la señal SOS."
-route_to_sos = []
-route_to_hospital = []
-selected_hospital = None
-selected_base = _best_base_to_target(int(active_sos['nodo_red']))
+# Inicializar firma en primera carga
+if "_last_state_sig" not in st.session_state:
+    st.session_state["_last_state_sig"] = _state_sig(shared_state)
 
-route_nodes_to_sos = _route_nodes(int(selected_base['nodo_red']), int(active_sos['nodo_red']))
-if route_nodes_to_sos:
-    route_to_sos = _route_coords(route_nodes_to_sos)
-else:
-    route_to_sos = [[float(selected_base['lat']), float(selected_base['lon'])], [float(active_sos['lat']), float(active_sos['lon'])]]
+# Fragment ligero: detecta cambios y dispara rerun solo cuando hay novedades
+_sync_watcher()
 
-if len(route_to_sos) < 2:
-    route_to_sos = [[float(selected_base['lat']), float(selected_base['lon'])], [float(active_sos['lat']), float(active_sos['lon'])]]
-else:
-    final_sos_point = [float(active_sos['lat']), float(active_sos['lon'])]
-    if route_to_sos[-1] != final_sos_point:
-        route_to_sos.append(final_sos_point)
+# Panel de estado (renderizado normal, estable)
+render_state_debug(shared_state)
 
-selected_hospital_info = {
-    "nombre": "Destino pendiente por operador",
-    "lat": float(active_sos["lat"]),
-    "lon": float(active_sos["lon"]),
-    "direccion": "",
-    "especialidades": "",
-    "perfiles": "",
-    "occ": random.randint(30, 98),
-    "wait": random.randint(10, 120),
-}
-
-if has_destination:
-    if not candidate.empty:
-        selected_hospital = candidate.iloc[0]
-        selected_target = int(selected_hospital['nodo_red'])
-    else:
-        selected_hospital = None
-        selected_target = int(
-            ox.distance.nearest_nodes(
-                grafo,
-                X=float(destination_payload.get("lon")),
-                Y=float(destination_payload.get("lat")),
-            )
-        )
-    route_nodes = _route_nodes(int(active_sos['nodo_red']), selected_target)
-    if was_waiting_at_sos:
-        route_status = "Orden recibida: salida inmediata desde SOS hacia el hospital indicado por operador."
-        route_to_sos = [[float(active_sos['lat']), float(active_sos['lon'])], [float(active_sos['lat']), float(active_sos['lon'])]]
-    else:
-        route_status = "Ruta en dos tramos: base → SOS y SOS → hospital indicado por operador."
-
-    if route_nodes:
-        route_to_hospital = _route_coords(route_nodes)
-    else:
-        route_status = "No existe una ruta conectada entre SOS y hospital. Se muestra una traza directa para el segundo tramo."
-        route_to_hospital = []
-
-    dest_lat = float(selected_hospital['lat']) if selected_hospital is not None else float(destination_payload.get("lat"))
-    dest_lon = float(selected_hospital['lon']) if selected_hospital is not None else float(destination_payload.get("lon"))
-
-    if len(route_to_hospital) < 2:
-        route_to_hospital = [[float(active_sos['lat']), float(active_sos['lon'])], [dest_lat, dest_lon]]
-        if route_status == "Ruta en dos tramos: base → SOS y SOS → hospital indicado por operador.":
-            route_status = "El tramo SOS → hospital se dibuja en modo directo."
-    else:
-        final_hospital_point = [dest_lat, dest_lon]
-        if route_to_hospital[-1] != final_hospital_point:
-            route_to_hospital.append(final_hospital_point)
-
-    selected_hospital_info = {
-        "nombre": str(
-            (selected_hospital.get("nombre", "") if selected_hospital is not None else destination_payload.get("nombre", ""))
-            or destination_name
-            or "Hospital destino"
-        ),
-        "lat": dest_lat,
-        "lon": dest_lon,
-        "direccion": str(
-            (selected_hospital.get("direccion_completa", "") if selected_hospital is not None else destination_payload.get("direccion", ""))
-            or destination_payload.get("direccion", "")
-            or ""
-        ),
-        "especialidades": str(
-            (selected_hospital.get("especialidades_texto", "") if selected_hospital is not None else destination_payload.get("especialidades", ""))
-            or destination_payload.get("especialidades", "")
-            or ""
-        ),
-        "perfiles": str(
-            (selected_hospital.get("perfiles_atencion", "") if selected_hospital is not None else destination_payload.get("perfiles", ""))
-            or destination_payload.get("perfiles", "")
-            or ""
-        ),
-        "occ": random.randint(30, 98),
-        "wait": random.randint(10, 120),
-    }
-    st.session_state["ambulance_waiting_at_sos"] = False
-
-if destination_id and destination_name and candidate.empty:
-    route_status = "Destino recibido pero no localizado en la base; la ambulancia llega al SOS y espera nueva orden del operador."
-
-if not has_destination and not has_destination_signal:
-    if was_waiting_at_sos:
-        route_status = "Ambulancia en punto SOS, esperando orden del operador."
-        route_to_sos = [[float(active_sos['lat']), float(active_sos['lon'])], [float(active_sos['lat']), float(active_sos['lon'])]]
-    else:
-        route_status = "Ruta en curso: base → SOS. Al llegar al SOS, la ambulancia quedara esperando la orden del operador."
-    st.session_state["ambulance_waiting_at_sos"] = True
-
-auto_refresh_waiting = bool(st.session_state.get("ambulance_waiting_at_sos", False)) and not has_destination_signal
-
-if auto_refresh_waiting:
-    # Discreet waiting mode: trigger Streamlit sync button in background.
-    components.html(
-        """
-        <script>
-        (function() {
-            try {
-                if (window.parent.__conductorAutoSyncTimer) {
-                    clearInterval(window.parent.__conductorAutoSyncTimer);
-                }
-
-                const syncIfVisible = () => {
-                    try {
-                        if (window.parent.document.visibilityState !== 'visible') return;
-
-                        const now = Date.now();
-                        const nextAllowed = Number(window.parent.sessionStorage.getItem('conductorNextSyncAt') || '0');
-                        if (now < nextAllowed) return;
-                        window.parent.sessionStorage.setItem('conductorNextSyncAt', String(now + 500));
-
-                        const btns = Array.from(window.parent.document.querySelectorAll('button'));
-                        const syncBtn = btns.find((b) => /sincronizar/i.test((b.innerText || '').trim()));
-
-                        if (syncBtn) {
-                            window.parent.sessionStorage.setItem('conductorScrollY', String(window.parent.scrollY || 0));
-                            syncBtn.click();
-                        }
-                    } catch (e) {}
-                };
-
-                syncIfVisible();
-                window.parent.__conductorAutoSyncTimer = window.setInterval(syncIfVisible, 100);
-            } catch (e) {}
-        })();
-        </script>
-        """,
-        height=0,
-    )
-else:
-    components.html(
-        """
-        <script>
-        (function() {
-            try {
-                if (window.parent.__conductorAutoSyncTimer) {
-                    clearInterval(window.parent.__conductorAutoSyncTimer);
-                    window.parent.__conductorAutoSyncTimer = null;
-                }
-            } catch (e) {}
-        })();
-        </script>
-        """,
-        height=0,
-    )
-
-st.info(route_status)
-
-operativo = {
-    "hospitales": [
-        {
-            "nombre": str(row.get("nombre", "Hospital")),
-            "lat": float(row["lat"]),
-            "lon": float(row["lon"]),
-            "nodo_red": int(row["nodo_red"]),
-            "direccion": str(row.get("direccion_completa", "") or ""),
-            "especialidades": str(row.get("especialidades_texto", "") or ""),
-            "perfiles": str(row.get("perfiles_atencion", "") or ""),
-            "occ": random.randint(35, 98),
-            "wait": random.randint(8, 125),
-        }
-        for _, row in df_hospitales.iterrows()
-    ],
-    "gps_sos": route_to_sos,
-    "gps_ida": route_to_hospital,
-    "destino": selected_hospital_info,
-    "origen": selected_base,
-    "sos": active_sos,
-    "was_waiting_at_sos": was_waiting_at_sos,
-    "esperando_destino": not has_destination,
-    "auto_refresh_waiting": auto_refresh_waiting,
-    "mensaje": f"<b>Señal SOS activa</b><br>{active_sos['nombre']}<br>La ambulancia acudira primero al SOS y despues al hospital indicado",
-}
-
-ambu_json = json.dumps(AMBULATORIOS)
-zonas_json = json.dumps(ZONAS_TRAFICO)
-operativos_json = json.dumps([operativo])
-alerts_json = json.dumps(traffic_alerts if traffic_alerts else ["Atasco moderado en la vía principal", "Obras puntuales en acceso secundario"])
 
 html_crudo = """
 <!DOCTYPE html>
@@ -945,19 +993,8 @@ html_crudo = """
             attribution: '© CartoDB'
         }).addTo(map);
 
-        // Restore parent page scroll after auto-refresh to avoid visual jump.
+        // Restore parent page scroll position after sync.
         try {
-            const softSyncUntil = Number(window.parent.sessionStorage.getItem('conductorSyncUntil') || '0');
-            if (softSyncUntil && Date.now() < softSyncUntil) {
-                window.parent.document.body.classList.add('conductor-soft-sync');
-                window.setTimeout(() => {
-                    try {
-                        window.parent.document.body.classList.remove('conductor-soft-sync');
-                    } catch (e) {}
-                }, Math.max(0, softSyncUntil - Date.now()) + 220);
-                window.parent.sessionStorage.removeItem('conductorSyncUntil');
-            }
-
             const savedY = window.parent.sessionStorage.getItem('conductorScrollY');
             if (savedY !== null) {
                 window.parent.scrollTo(0, parseInt(savedY, 10));
@@ -1076,7 +1113,7 @@ html_crudo = """
                 }
 
                 const pasoAnimacion = 4;
-                const tickMs = 50;
+                const tickMs = 63;
 
                 function animarRuta(path, etaBase, onFinish) {
                     let idx = 0;
@@ -1101,33 +1138,6 @@ html_crudo = """
                 const etaSos = Math.max(1, Math.round((gpsSos.length || 2) / 10));
                 const etaHosp = Math.max(1, Math.round((gpsHosp.length || 2) / 10));
 
-                function triggerParentSync() {
-                    try {
-                        const now = Date.now();
-                        const nextAllowed = Number(window.parent.sessionStorage.getItem('conductorNextSyncAt') || '0');
-                        if (now < nextAllowed) return;
-
-                        // Ultra-fast polling while waiting for operator approval.
-                        window.parent.sessionStorage.setItem('conductorNextSyncAt', String(now + 120));
-                        window.parent.sessionStorage.setItem('conductorScrollY', String(window.parent.scrollY || 0));
-
-                        // Short darkening pulse to communicate incoming sync.
-                        window.parent.sessionStorage.setItem('conductorSyncUntil', String(now + 320));
-                        window.parent.document.body.classList.add('conductor-soft-sync');
-                        window.setTimeout(() => {
-                            try {
-                                window.parent.document.body.classList.remove('conductor-soft-sync');
-                            } catch (e) {}
-                        }, 360);
-                    } catch (e) {}
-
-                    try {
-                        const btns = Array.from(window.parent.document.querySelectorAll('button'));
-                        const syncBtn = btns.find((b) => (b.innerText || '').trim().includes('Sincronizar'));
-                        if (syncBtn) syncBtn.click();
-                    } catch (e) {}
-                }
-
                 setTimeout(() => {
                     animarRuta(sosSuave, etaSos, () => {
                         markerAmb.setLatLng([op.sos.lat, op.sos.lon]);
@@ -1135,11 +1145,8 @@ html_crudo = """
                         document.getElementById('kDist').textContent = '0 m';
                         if (!hasHospRoute) {
                             document.getElementById('kEta').textContent = '--';
-                            if (op.auto_refresh_waiting) {
-                                setTimeout(() => {
-                                    triggerParentSync();
-                                }, 700);
-                            }
+                            // La sincronización automática con el operador la gestiona
+                            // el fragment de Python (run_every) — no se necesita JS aquí.
                             return;
                         }
                         setTimeout(() => {
@@ -1155,11 +1162,6 @@ html_crudo = """
 </html>
 """
 
-html_mapa = html_crudo.replace("__AMBULATORIOS__", ambu_json)\
-                      .replace("__ZONAS_TRAFICO__", zonas_json)\
-                      .replace("__OPERATIVOS__", operativos_json)\
-                      .replace("__ALERTS__", alerts_json)
 
-st.markdown('<div class="map-wrap">', unsafe_allow_html=True)
-components.html(html_mapa, height=1000)
-st.markdown('</div>', unsafe_allow_html=True)
+rd = _build_route_data(shared_state, active_sos)
+render_mapa(rd)

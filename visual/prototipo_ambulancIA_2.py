@@ -353,8 +353,8 @@ html_crudo = """
             var frameIndex = 0;
             
             // VELOCIDADES
-            var velocidadIda = 10;
-            var velocidadVuelta = 20;
+            var velocidadIda = 13;
+            var velocidadVuelta = 25;
             
             function animarIda() {
                 if(frameIndex < idaSuave.length) { 

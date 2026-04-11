@@ -630,8 +630,11 @@ def map_render_driver_map(
     <div id=\"map-attrib\">Based on real data</div>
     <div id=\"map\"></div>
   <script>
+    const madridBounds = L.latLngBounds([[40.31, -3.88], [40.54, -3.56]]);
     const map = L.map('map', {{ preferCanvas: true }}).setView([40.4168, -3.7038], 13.8);
     L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{ attribution: '© CartoDB' }}).addTo(map);
+    map.setMaxBounds(madridBounds.pad(0.15));
+    map.fitBounds(madridBounds.pad(0.06));
     const scenario  = {scenario_json};
     const bases     = {bases_json};
     const incidents = {incidents_json};
