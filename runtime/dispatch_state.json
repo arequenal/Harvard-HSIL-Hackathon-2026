@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updated_at": "2026-04-11T08:21:26.227849+00:00",
+  "updated_at": "2026-04-11T08:53:07.776339+00:00",
   "case": {
     "summary": "Nivel 4 - Muy urgente / Medicina intensiva",
     "source_text": "paciente varón de 67 anos con dolor toracico oppresivo. Disney a presión arterial 178 sobre 102. Saturación 90 y Glasswo 13.",
@@ -10,17 +10,17 @@
     "explicacion_especialidad": "Se le quiere llevar a Medicina intensiva con confianza 0.99, debido a que presenta sintomas de edad avanzada (67 anos), saturacion baja (90%), dolor toracico presente asociadas normalmente a problemas como patologia cardiovascular aguda o dolor toracico de alto riesgo, hipoxemia clinicamente relevante."
   },
   "destination": {
-    "centro_id": "CH0034",
-    "nombre": "Hospital CH0034",
-    "telefono": "+34 911000003",
-    "email": "admisiones.ch0034@hospital.madrid.es",
-    "direccion": "CALLE del Doctor Esquerdo 46 Madrid 28007",
-    "especialidades": "Nefrología | Trasplante de órganos | Extracción de órganos | Otras unidades asistenciales | Aparato digestivo | Radiodiagnóstico | Servicio de transfusión | Extracción de sangre para donación | Foniatría | Odontología/Estomatología | Endocrinología | Cardiología | Rehabilitación | Urología | Cuidados intermedios neonatales | Diálisis | Obtención de tejidos | Radioterapia | Hematología clínica | Microbiología y Parasitología | Bioquímica clínica | Cirugía menor ambulatoria | Cirugía cardiaca | Cirugía pediátrica | Nutrición y Dietética | Banco de oocitos | Farmacia | Cirugía plástica y reparadora | Anestesia y Reanimación | Fecundación in vitro | Psiquiatría Infantil y de la Adolescencia | Medicina preventiva | Inseminación artificial | Genética | Inmunología | Cirugía ortopédica y Traumatología | Otorrinolaringología | Ginecología | Cuidados intensivos neonatales | Geriatría | Banco de tejidos | Laboratorio de hematología | Psiquiatría | Hospital de día | Litotricia renal | Medicina intensiva | Banco de embriones | Laboratorio de semen para capacitación espermática | Implantación de tejidos | Medicina nuclear | Laboratorio Clínico | Oftalmología | Vacunación | Oncología | Atención sanitaria domiciliaria | Logopedia | Recuperación de oocitos | Enfermería obstétrico-ginecológica (matrona) | Psicología clínica | Angiología y Cirugía Vascular | Tratamiento del dolor | Obstetricia | Enfermería | Medicina interna | Cuidados paliativos | Neurocirugía | Cirugía general y digestivo | Neumología | Transporte sanitario (carretera, aéreo, marítimo) | Asistencia a lesionados y contaminados por elementos radiactivos y radiaciones ionizantes | Atención Continuada en Atención Primaria | Planificación familiar | Neurofisiología | Medicina del trabajo | Cirugía mayor ambulatoria | Alergología | Cirugía torácica | Banco de semen | Anatomía patológica | Obtención de muestras | Reumatología | Dermatología | Cirugía maxilofacial | Hemodinámica | Terapia ocupacional | Fisioterapia | Pediatría | Neurología",
+    "centro_id": "CH0053",
+    "nombre": "Hospital Clínico San Carlos (HCSC)",
+    "telefono": "+34 911000008",
+    "email": "admisiones.ch0053@hospital.madrid.es",
+    "direccion": "CALLE del Profesor Martín Lagos s/n Madrid 28040",
+    "especialidades": "Dermatología | Implantación de tejidos | Obtención de tejidos | Otras unidades asistenciales | Farmacología clínica | Laboratorio de hematología | Neurocirugía | Banco de embriones | Cirugía pediátrica | Neurofisiología | Logopedia | Obstetricia | Neumología | Banco de tejidos | Anatomía patológica | Rehabilitación | Angiología y Cirugía Vascular | Enfermería obstétrico-ginecológica (matrona) | Medicina interna | Nutrición y Dietética | Genética | Obtención de muestras | Psiquiatría | Cuidados intermedios neonatales | Banco de oocitos | Endocrinología | Bioquímica clínica | Recuperación de oocitos | Banco de semen | Pediatría | Farmacia | Extracción de sangre para donación | Cirugía plástica y reparadora | Laboratorio de semen para capacitación espermática | Hematología clínica | Cirugía torácica | Planificación familiar | Geriatría | Medicina del trabajo | Otorrinolaringología | Extracción de órganos | Medicina preventiva | Medicina nuclear | Radioterapia | Microbiología y Parasitología | Cuidados paliativos | Cirugía mayor ambulatoria | Cirugía maxilofacial | Inmunología | Cardiología | Foniatría | Inseminación artificial | Cuidados intensivos neonatales | Diálisis | Servicio de transfusión | Hospital de día | Alergología | Urología | Reumatología | Trasplante de órganos | Laboratorio Clínico | Atención Continuada en Atención Primaria | Terapia ocupacional | Cirugía ortopédica y Traumatología | Anestesia y Reanimación | Fecundación in vitro | Oncología | Atención sanitaria domiciliaria | Medicina intensiva | Tratamiento del dolor | Ginecología | Nefrología | Fisioterapia | Vacunación | Cirugía general y digestivo | Hemodinámica | Cirugía cardiaca | Aparato digestivo | Radiodiagnóstico | Psicología clínica | Cirugía menor ambulatoria | Oftalmología | Enfermería | Neurología",
     "perfiles": "cardiovascular | neurologia | trauma_ortopedia | obstetricia_neonatal | pediatria | salud_mental | diagnostico | urgencias_criticas | rehabilitacion | cirugia | oncologia",
     "municipio": "Madrid",
     "centro_tipo": "Hospital general",
-    "lat": 40.4189887905882,
-    "lon": -3.66992777848944,
+    "lat": 40.43996147359732,
+    "lon": -3.7194577348425057,
     "eta_min": 12
   },
   "traffic_alerts": [
@@ -29,9 +29,9 @@
   "operator_notes": "",
   "navigation": {
     "sos": {
-      "nombre": "SOS Ventas",
-      "lat": 40.4312,
-      "lon": -3.6637
+      "nombre": "SOS Gran Via",
+      "lat": 40.4202,
+      "lon": -3.7058
     }
   }
 }

@@ -666,6 +666,15 @@ def map_render_driver_map(
     }} else if (route.length) {{
         L.marker(route[0], {{ icon: sosIcon }}).addTo(map).bindTooltip('<b style="color:#ff4757">PUNTO OPERATIVO</b>', {{ direction:'top', className:'custom-tip' }});
     }}
+    const ambulancePoint = route.length ? route[0] : (sosPoint && Number.isFinite(Number(sosPoint.lat)) && Number.isFinite(Number(sosPoint.lon)) ? [Number(sosPoint.lat), Number(sosPoint.lon)] : [40.4168, -3.7038]);
+    const ambulanceZoom = route.length >= 2 ? 15.0 : 15.2;
+    map.setView(ambulancePoint, ambulanceZoom);
+    window.setTimeout(() => {{
+        try {{
+            map.invalidateSize();
+            map.setView(ambulancePoint, ambulanceZoom);
+        }} catch (e) {{}}
+    }}, 120);
     const hospitalMarkers = {{}};
     scenario.hospitales.forEach((h) => {{
         const colorClass = (h.occ > 85 ? 'hosp-red' : (h.occ > 50 ? 'hosp-orange' : 'hosp-green'));
@@ -706,10 +715,11 @@ def map_render_driver_map(
         }}
         const routeBounds = routeLine.getBounds();
         if (routeBounds.isValid()) {{
-            map.fitBounds(routeBounds.pad(0.03), {{ maxZoom: 16.8 }});
             const diagKm = map.distance(routeBounds.getSouthWest(), routeBounds.getNorthEast()) / 1000;
-            if (diagKm > 30) {{
-                map.setView(route[0], 14.6);
+            if (diagKm <= 12) {{
+                map.fitBounds(routeBounds.pad(0.08), {{ maxZoom: 15.6 }});
+            }} else {{
+                map.setView(ambulancePoint, ambulanceZoom);
             }}
         }}
         const etaTotal=Math.max(2,Number(scenario.eta_min||8)), pasoAnimacion=4, tickMs=50;
@@ -759,7 +769,7 @@ def map_render_fallback_map(scenario: Dict[str, Any], bases: List[Dict[str, Any]
         return
 
     st.caption("Mapa de respaldo (si el interactivo no carga)")
-    st.map(pd.DataFrame(points), latitude="lat", longitude="lon", zoom=11)
+    st.map(pd.DataFrame(points), latitude="lat", longitude="lon", zoom=13)
 
 
 def main() -> None:
