@@ -186,6 +186,18 @@ def load_hospitals() -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
+    graph = load_dispatch_graph()
+    if graph is not None and "lat" in df.columns and "lon" in df.columns:
+        if "nodo_red" not in df.columns:
+            df["nodo_red"] = pd.NA
+
+        mask = df["lat"].notna() & df["lon"].notna() & df["nodo_red"].isna()
+        if mask.any():
+            df.loc[mask, "nodo_red"] = df.loc[mask].apply(
+                lambda row: int(ox.distance.nearest_nodes(graph, X=float(row["lon"]), Y=float(row["lat"]))),
+                axis=1,
+            )
+
     return df
 
 
@@ -235,6 +247,26 @@ def _normalize_text(value: Any) -> str:
     normalized = unicodedata.normalize("NFKD", str(value or ""))
     clean = "".join(ch for ch in normalized if not unicodedata.combining(ch))
     return " ".join(clean.lower().strip().split())
+
+
+def _multi_source_min_costs(graph: nx.MultiDiGraph, base_nodes: List[int]) -> Dict[int, float]:
+    unique_sources = [int(n) for n in dict.fromkeys(base_nodes)]
+    if not unique_sources:
+        return {}
+
+    best_costs: Dict[int, float] = {}
+    for weight in ("weighted_length", "length"):
+        try:
+            partial = nx.multi_source_dijkstra_path_length(graph, unique_sources, weight=weight)
+        except Exception:
+            continue
+
+        for node, value in partial.items():
+            v = float(value)
+            if node not in best_costs or v < best_costs[node]:
+                best_costs[node] = v
+
+    return best_costs
 
 
 def decode_urgency_label(raw_prediction: int, label_encoder: Any, urgency_names: Dict[int, str]) -> int:
@@ -460,36 +492,27 @@ def select_hospital(hospitals: pd.DataFrame, specialty_name: str) -> pd.Series:
     if graph is None or search_space.empty or "lat" not in search_space.columns or "lon" not in search_space.columns:
         return search_space.iloc[0] if not search_space.empty else hospitals.iloc[0]
 
+    base_nodes = [int(base["nodo_red"]) for base in bases if "nodo_red" in base]
+    travel_costs = _multi_source_min_costs(graph, base_nodes)
+
     best_idx = None
     best_cost = float("inf")
     for idx, row in search_space.iterrows():
-        lat = row.get("lat")
-        lon = row.get("lon")
-        if pd.isna(lat) or pd.isna(lon):
-            continue
+        target_node = row.get("nodo_red")
+        if pd.isna(target_node):
+            lat = row.get("lat")
+            lon = row.get("lon")
+            if pd.isna(lat) or pd.isna(lon):
+                continue
+            try:
+                target_node = int(ox.distance.nearest_nodes(graph, X=float(lon), Y=float(lat)))
+            except Exception:
+                continue
 
-        try:
-            target_node = int(ox.distance.nearest_nodes(graph, X=float(lon), Y=float(lat)))
-        except Exception:
-            continue
-
-        for base in bases:
-            for weight in ("weighted_length", "length"):
-                try:
-                    cost = float(
-                        nx.shortest_path_length(
-                            graph,
-                            source=int(base["nodo_red"]),
-                            target=target_node,
-                            weight=weight,
-                        )
-                    )
-                except Exception:
-                    continue
-
-                if cost < best_cost:
-                    best_cost = cost
-                    best_idx = idx
+        cost = float(travel_costs.get(int(target_node), float("inf")))
+        if cost < best_cost:
+            best_cost = cost
+            best_idx = idx
 
     if best_idx is not None:
         return search_space.loc[best_idx]

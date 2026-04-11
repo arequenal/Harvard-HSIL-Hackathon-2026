@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "updated_at": "2026-04-11T00:51:09.076921+00:00",
+  "version": 6,
+  "updated_at": "2026-04-11T01:11:29.522518+00:00",
   "case": {
     "summary": "Nivel 4 - Muy urgente / Medicina intensiva",
     "source_text": "paciente varón de 67 anos con dolor toracico oppresivo. Disney a presión arterial 178 sobre 102. Saturación 90 y Glasswo 13.",
@@ -15,10 +15,23 @@
     "telefono": "+34 911000001",
     "email": "admisiones.ch0023@hospital.madrid.es",
     "direccion": "AVDA de Córdoba S/N Madrid 28041",
+    "especialidades": "Otorrinolaringología | Oftalmología | Neurología | Nefrología | Endocrinología | Trasplante de órganos | Cardiología | Pediatría | Diálisis | Medicina interna | Geriatría | Aparato digestivo | Neurocirugía | Enfermería obstétrico-ginecológica (matrona) | Neumología | Banco de tejidos | Otras unidades asistenciales | Cirugía menor ambulatoria | Foniatría | Cirugía maxilofacial | Medicina nuclear | Alergología | Fisioterapia | Litotricia renal | Cirugía torácica | Planificación familiar | Obstetricia | Obtención de tejidos | Psiquiatría | Cirugía ortopédica y Traumatología | Cirugía refractiva | Vacunación | Angiología y Cirugía Vascular | Tratamiento del dolor | Banco de semen | Fecundación in vitro | Oncología | Implantación de tejidos | Laboratorio de hematología | Atención Continuada en Atención Primaria | Rehabilitación | Banco de embriones | Inseminación artificial | Cuidados intermedios neonatales | Enfermería | Laboratorio Clínico | Obtención de muestras | Cirugía pediátrica | Banco de oocitos | Dermatología | Hospital de día | Cirugía general y digestivo | Medicina intensiva | Hematología clínica | Cirugía mayor ambulatoria | Cirugía plástica y reparadora | Interrupción voluntaria del embarazo | Radioterapia | Urología | Neurofisiología | Psiquiatría Infantil y de la Adolescencia | Extracción de órganos | Radiodiagnóstico | Servicio de transfusión | Atención sanitaria domiciliaria | Logopedia | Recuperación de oocitos | Reumatología | Medicina del trabajo | Genética | Anatomía patológica | Hemodinámica | Laboratorio de semen para capacitación espermática | Cuidados intensivos neonatales | Farmacología clínica | Extracción de sangre para donación | Microbiología y Parasitología | Cuidados paliativos | Terapia ocupacional | Cirugía cardiaca | Ginecología | Anestesia y Reanimación | Nutrición y Dietética | Medicina preventiva | Farmacia | Inmunología | Bioquímica clínica | Psicología clínica",
+    "perfiles": "cardiovascular | neurologia | trauma_ortopedia | obstetricia_neonatal | pediatria | salud_mental | diagnostico | urgencias_criticas | rehabilitacion | cirugia | oncologia",
+    "municipio": "Madrid",
+    "centro_tipo": "Hospital general",
+    "lat": 40.37644141048938,
+    "lon": -3.696941655287421,
     "eta_min": 12
   },
   "traffic_alerts": [
     "Atasco severo en eje principal"
   ],
-  "operator_notes": ""
+  "operator_notes": "",
+  "navigation": {
+    "sos": {
+      "nombre": "SOS Retiro",
+      "lat": 40.4166,
+      "lon": -3.6844
+    }
+  }
 }

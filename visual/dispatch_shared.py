@@ -50,6 +50,13 @@ def default_state() -> Dict[str, Any]:
         },
         "traffic_alerts": [],
         "operator_notes": "",
+        "navigation": {
+            "sos": {
+                "nombre": "",
+                "lat": None,
+                "lon": None,
+            }
+        },
     }
 
 

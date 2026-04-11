@@ -317,6 +317,8 @@ def map_build_operational_scenario(
 ) -> Dict[str, Any]:
     destination = shared_state.get("destination", {})
     case_info = shared_state.get("case", {}) if isinstance(shared_state.get("case", {}), dict) else {}
+    navigation = shared_state.get("navigation", {}) if isinstance(shared_state.get("navigation", {}), dict) else {}
+    sos_shared = navigation.get("sos", {}) if isinstance(navigation.get("sos", {}), dict) else {}
     destination_id = str(destination.get("centro_id", "")).strip().upper()
     destination_name = str(destination.get("nombre", "")).strip().lower()
     specialty_name = str(case_info.get("especialidad", "")).strip()
@@ -342,9 +344,6 @@ def map_build_operational_scenario(
         specialty_candidates = hospitals_df[
             hospitals_df["especialidades_texto"].astype(str).apply(lambda text: specialty_norm in _normalize_text(text))
         ]
-
-    urgency_level = _extract_level(urgency_value)
-    is_level_4 = urgency_level == 4 or "nivel 4" in _normalize_text(urgency_value)
 
     candidate = pd.DataFrame()
     if destination_id:
@@ -380,6 +379,25 @@ def map_build_operational_scenario(
                     continue
         return chosen_base, best_cost
 
+    def _multi_source_min_costs() -> Dict[int, float]:
+        source_nodes = [int(base["nodo_red"]) for base in bases if "nodo_red" in base]
+        if not source_nodes:
+            return {}
+
+        best_costs: Dict[int, float] = {}
+        for weight in ("weighted_length", "length"):
+            try:
+                partial = nx.multi_source_dijkstra_path_length(graph, source_nodes, weight=weight)
+            except Exception:
+                continue
+
+            for node, value in partial.items():
+                v = float(value)
+                if node not in best_costs or v < best_costs[node]:
+                    best_costs[node] = v
+
+        return best_costs
+
     if candidate.empty:
         # Regla de negocio:
         # - Priorizar hospital mas cercano con la especialidad indicada.
@@ -387,18 +405,18 @@ def map_build_operational_scenario(
         best_idx = None
         best_cost = float("inf")
         origin_base = bases[0]
+        travel_costs = _multi_source_min_costs()
 
         search_space = specialty_candidates if not specialty_candidates.empty else hospitals_df
         for idx, row in search_space.iterrows():
             target_node_i = int(row["nodo_red"])
-            base_i, travel_i = _best_base_and_travel(target_node_i)
+            travel_i = float(travel_costs.get(target_node_i, float("inf")))
             if travel_i == float("inf"):
                 continue
 
             if travel_i < best_cost:
                 best_cost = travel_i
                 best_idx = idx
-                origin_base = base_i
 
         target_row = hospitals_df.loc[best_idx] if best_idx is not None else hospitals_df.iloc[0]
         if not specialty_candidates.empty:
@@ -410,15 +428,25 @@ def map_build_operational_scenario(
         status = "Destino sincronizado con conductor"
 
     target_node = int(target_row["nodo_red"])
-    if not candidate.empty:
+
+    sos_lat = sos_shared.get("lat")
+    sos_lon = sos_shared.get("lon")
+    has_sos_sync = isinstance(sos_lat, (int, float)) and isinstance(sos_lon, (int, float))
+
+    if has_sos_sync:
+        sos_node = int(ox.distance.nearest_nodes(graph, X=float(sos_lon), Y=float(sos_lat)))
+        origin_base, _ = _best_base_and_travel(sos_node)
+    else:
+        sos_node = None
         origin_base, _ = _best_base_and_travel(target_node)
 
     route_nodes: List[int] | None = None
     route_graphs: List[nx.MultiDiGraph | nx.Graph] = [graph, graph.to_undirected()]
+    route_source = int(sos_node) if sos_node is not None else int(origin_base["nodo_red"])
     for g in route_graphs:
         for weight in ("weighted_length", "length"):
             try:
-                route_nodes = nx.shortest_path(g, source=origin_base["nodo_red"], target=target_node, weight=weight)
+                route_nodes = nx.shortest_path(g, source=route_source, target=target_node, weight=weight)
                 break
             except nx.NetworkXNoPath:
                 continue
@@ -428,11 +456,19 @@ def map_build_operational_scenario(
     if route_nodes:
         route_coords = [[float(graph.nodes[n]["y"]), float(graph.nodes[n]["x"])] for n in route_nodes]
     else:
-        route_coords = [[float(origin_base["lat"]), float(origin_base["lon"])], [float(target_row["lat"]), float(target_row["lon"])]]
+        if has_sos_sync:
+            route_coords = [[float(sos_lat), float(sos_lon)], [float(target_row["lat"]), float(target_row["lon"])]]
+        else:
+            route_coords = [[float(origin_base["lat"]), float(origin_base["lon"])], [float(target_row["lat"]), float(target_row["lon"])]]
 
     final_point = [float(target_row["lat"]), float(target_row["lon"])]
     if route_coords[-1] != final_point:
         route_coords.append(final_point)
+
+    if has_sos_sync and route_coords:
+        first_point = [float(sos_lat), float(sos_lon)]
+        if route_coords[0] != first_point:
+            route_coords.insert(0, first_point)
 
     hospitals_view: List[Dict[str, Any]] = []
     for idx, row in hospitals_df.iterrows():
@@ -468,6 +504,12 @@ def map_build_operational_scenario(
             "direccion": str(target_row.get("direccion_completa", destination.get("direccion", ""))),
         },
         "origen": origin_base,
+        "sos": {
+            "nombre": str(sos_shared.get("nombre", "SOS")),
+            "lat": float(sos_lat) if has_sos_sync else float(route_coords[0][0]),
+            "lon": float(sos_lon) if has_sos_sync else float(route_coords[0][1]),
+            "sync": bool(has_sos_sync),
+        },
         "status": status,
         "eta_min": int(destination.get("eta_min", max(6, round(len(route_coords) / 12))) or max(6, round(len(route_coords) / 12))),
         "alerts": [str(a) for a in shared_state.get("traffic_alerts", []) if str(a).strip()],
@@ -613,8 +655,12 @@ def map_render_driver_map(
         L.marker([b.lat, b.lon], {{ icon }}).bindTooltip(`<b style="color:#00c8ff">BASE SVB</b><br>${{b.nombre}}`, {{ direction:'top', className:'custom-tip' }}).addTo(map);
     }});
     const route = scenario.gps_ida || [];
+    const sosPoint = scenario.sos || null;
     const sosIcon = L.divIcon({{ className:'sos-marker', html:'SOS', iconSize:[28,28], iconAnchor:[14,14] }});
-    if (route.length) {{
+    if (sosPoint && Number.isFinite(Number(sosPoint.lat)) && Number.isFinite(Number(sosPoint.lon))) {{
+        L.marker([Number(sosPoint.lat), Number(sosPoint.lon)], {{ icon: sosIcon }}).addTo(map)
+            .bindTooltip('<b style="color:#ff4757">SOS sincronizado</b><br>' + (sosPoint.nombre || 'Punto operativo'), {{ direction:'top', className:'custom-tip' }});
+    }} else if (route.length) {{
         L.marker(route[0], {{ icon: sosIcon }}).addTo(map).bindTooltip('<b style="color:#ff4757">PUNTO OPERATIVO</b>', {{ direction:'top', className:'custom-tip' }});
     }}
     const hospitalMarkers = {{}};
@@ -1352,6 +1398,79 @@ def main() -> None:
 
     with tab_mapa:
         st.markdown('<div class="u-section"><span class="sec-icon">◉</span> Mapa operativo</div>', unsafe_allow_html=True)
+        sync_col, toggle_col = st.columns([1, 1.6], gap="small")
+        with sync_col:
+            if st.button("Sync mapa operador", use_container_width=True):
+                st.rerun()
+        with toggle_col:
+            auto_sync_map = st.toggle(
+                "Auto-sync mapa (1.2s)",
+                value=bool(st.session_state.get("operator_map_auto_sync", True)),
+                key="operator_map_auto_sync",
+                help="Sincroniza automaticamente el mapa del operador con el estado del conductor.",
+            )
+
+        if auto_sync_map:
+            components.html(
+                """
+                <script>
+                (function() {
+                    try {
+                        const parent = window.parent;
+                        if (!parent) return;
+
+                        if (parent.__operatorMapAutoSyncTimer) {
+                            clearInterval(parent.__operatorMapAutoSyncTimer);
+                            parent.__operatorMapAutoSyncTimer = null;
+                        }
+
+                        const runSync = () => {
+                            try {
+                                const tabs = Array.from(parent.document.querySelectorAll('[data-baseweb="tab"]'));
+                                const mapTab = tabs.find((t) => /mapa y navegacion/i.test((t.innerText || '').trim()));
+                                const mapTabActive = mapTab && mapTab.getAttribute('aria-selected') === 'true';
+                                if (!mapTabActive) return;
+
+                                const now = Date.now();
+                                const nextAllowed = Number(parent.sessionStorage.getItem('operatorNextMapSyncAt') || '0');
+                                if (now < nextAllowed) return;
+                                parent.sessionStorage.setItem('operatorNextMapSyncAt', String(now + 600));
+
+                                const btns = Array.from(parent.document.querySelectorAll('button'));
+                                const syncBtn = btns.find((b) => /sync mapa operador/i.test((b.innerText || '').trim()));
+                                if (syncBtn) {
+                                    syncBtn.click();
+                                }
+                            } catch (e) {}
+                        };
+
+                        runSync();
+                        parent.__operatorMapAutoSyncTimer = parent.setInterval(runSync, 180);
+                    } catch (e) {}
+                })();
+                </script>
+                """,
+                height=0,
+            )
+        else:
+            components.html(
+                """
+                <script>
+                (function() {
+                    try {
+                        const parent = window.parent;
+                        if (!parent) return;
+                        if (parent.__operatorMapAutoSyncTimer) {
+                            clearInterval(parent.__operatorMapAutoSyncTimer);
+                            parent.__operatorMapAutoSyncTimer = null;
+                        }
+                    } catch (e) {}
+                })();
+                </script>
+                """,
+                height=0,
+            )
+
         st.markdown('<div class="map-wrap">', unsafe_allow_html=True)
         map_render_driver_map(
             scenario=scenario,

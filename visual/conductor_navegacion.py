@@ -14,7 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from visual.dispatch_shared import default_state, load_state, save_state
+from visual.dispatch_shared import default_state, load_state, save_state, update_state
 
 BASE_DIR = Path(__file__).resolve().parent
 GRAPH_PATH = BASE_DIR / "madrid_grafo.graphml"
@@ -384,6 +384,38 @@ def get_active_sos() -> dict:
     return sos
 
 
+def _publish_active_sos_if_changed(state: dict[str, object], sos: dict[str, object]) -> None:
+    nav = state.get("navigation", {}) if isinstance(state.get("navigation", {}), dict) else {}
+    prev = nav.get("sos", {}) if isinstance(nav.get("sos", {}), dict) else {}
+
+    prev_name = str(prev.get("nombre", "") or "").strip()
+    prev_lat = prev.get("lat")
+    prev_lon = prev.get("lon")
+
+    new_name = str(sos.get("nombre", "") or "").strip()
+    new_lat = float(sos.get("lat", 0.0) or 0.0)
+    new_lon = float(sos.get("lon", 0.0) or 0.0)
+
+    same_name = prev_name == new_name
+    same_lat = isinstance(prev_lat, (int, float)) and abs(float(prev_lat) - new_lat) < 1e-6
+    same_lon = isinstance(prev_lon, (int, float)) and abs(float(prev_lon) - new_lon) < 1e-6
+
+    if same_name and same_lat and same_lon:
+        return
+
+    update_state(
+        {
+            "navigation": {
+                "sos": {
+                    "nombre": new_name,
+                    "lat": new_lat,
+                    "lon": new_lon,
+                }
+            }
+        }
+    )
+
+
 def _best_base_to_target(target_node: int):
     best = AMBULATORIOS[0]
     best_cost = float('inf')
@@ -595,6 +627,7 @@ destination_name = str(state.get("destination", {}).get("nombre", "")).strip()
 destination_payload = state.get("destination", {}) if isinstance(state.get("destination", {}), dict) else {}
 traffic_alerts = [str(a) for a in state.get("traffic_alerts", []) if str(a).strip()]
 active_sos = get_active_sos()
+_publish_active_sos_if_changed(state, active_sos)
 render_state_debug(state, destination_id, destination_name, traffic_alerts)
 
 candidate = _resolve_destination_candidate(df_hospitales, destination_id, destination_name)
@@ -718,34 +751,31 @@ if auto_refresh_waiting:
         <script>
         (function() {
             try {
-                if (window.parent.__conductorAutoReloadTimer) {
-                    clearInterval(window.parent.__conductorAutoReloadTimer);
+                if (window.parent.__conductorAutoSyncTimer) {
+                    clearInterval(window.parent.__conductorAutoSyncTimer);
                 }
 
                 const syncIfVisible = () => {
                     try {
                         if (window.parent.document.visibilityState !== 'visible') return;
 
+                        const now = Date.now();
+                        const nextAllowed = Number(window.parent.sessionStorage.getItem('conductorNextSyncAt') || '0');
+                        if (now < nextAllowed) return;
+                        window.parent.sessionStorage.setItem('conductorNextSyncAt', String(now + 500));
+
                         const btns = Array.from(window.parent.document.querySelectorAll('button'));
                         const syncBtn = btns.find((b) => /sincronizar/i.test((b.innerText || '').trim()));
 
                         if (syncBtn) {
-                            syncBtn.click();
-                            return;
-                        }
-
-                        // Rare fallback if the button is temporarily unavailable.
-                        const now = Date.now();
-                        const lastHard = Number(window.parent.sessionStorage.getItem('conductorLastHardReloadAt') || '0');
-                        if (now - lastHard > 15000) {
-                            window.parent.sessionStorage.setItem('conductorLastHardReloadAt', String(now));
                             window.parent.sessionStorage.setItem('conductorScrollY', String(window.parent.scrollY || 0));
-                            window.parent.location.reload();
+                            syncBtn.click();
                         }
                     } catch (e) {}
                 };
 
-                window.parent.__conductorAutoReloadTimer = window.setInterval(syncIfVisible, 250);
+                syncIfVisible();
+                window.parent.__conductorAutoSyncTimer = window.setInterval(syncIfVisible, 100);
             } catch (e) {}
         })();
         </script>
@@ -758,9 +788,9 @@ else:
         <script>
         (function() {
             try {
-                if (window.parent.__conductorAutoReloadTimer) {
-                    clearInterval(window.parent.__conductorAutoReloadTimer);
-                    window.parent.__conductorAutoReloadTimer = null;
+                if (window.parent.__conductorAutoSyncTimer) {
+                    clearInterval(window.parent.__conductorAutoSyncTimer);
+                    window.parent.__conductorAutoSyncTimer = null;
                 }
             } catch (e) {}
         })();
@@ -1078,7 +1108,7 @@ html_crudo = """
                         if (now < nextAllowed) return;
 
                         // Ultra-fast polling while waiting for operator approval.
-                        window.parent.sessionStorage.setItem('conductorNextSyncAt', String(now + 800));
+                        window.parent.sessionStorage.setItem('conductorNextSyncAt', String(now + 120));
                         window.parent.sessionStorage.setItem('conductorScrollY', String(window.parent.scrollY || 0));
 
                         // Short darkening pulse to communicate incoming sync.
