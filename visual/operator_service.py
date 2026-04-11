@@ -5,6 +5,7 @@ import os
 import pickle
 import sys
 import unicodedata
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -473,35 +474,81 @@ def optional_llm_refine(base_explanation: Dict[str, Any], model_name: str) -> st
     )
 
 
-def select_hospital(hospitals: pd.DataFrame, specialty_name: str) -> pd.Series:
+def select_hospital(
+    hospitals: pd.DataFrame,
+    specialty_name: str,
+    sos_lat: float | None = None,
+    sos_lon: float | None = None,
+) -> pd.Series:
+    """Devuelve el hospital más cercano al punto SOS que tenga la especialidad requerida.
+
+    Estrategia de filtrado por especialidad (en orden de preferencia):
+      1. Coincidencia exacta por substring normalizado.
+      2. Fuzzy matching (SequenceMatcher >= 0.55) sobre cada token de especialidades.
+      3. Sin filtro: se usa toda la red de hospitales.
+
+    El coste de viaje se calcula desde el nodo SOS (posición del paciente) hasta cada
+    hospital candidato usando Dijkstra sobre el grafo vial con tráfico.  Si no se
+    proporciona la posición SOS, se cae al comportamiento anterior (origen = bases SAMUR).
+    """
     if hospitals.empty:
         raise ValueError("No hay hospitales disponibles para seleccionar")
 
     graph = load_dispatch_graph()
-    bases = load_samur_bases_for_dispatch(graph)
     specialty_norm = _normalize_text(specialty_name)
 
-    specialty_candidates = pd.DataFrame()
+    # ── 1. Filtrar por especialidad ──────────────────────────────────────────
+    def _exact_match(text: str) -> bool:
+        return specialty_norm in _normalize_text(text)
+
+    def _fuzzy_match(text: str) -> bool:
+        norm = _normalize_text(text)
+        # Comparar contra cada token del campo especialidades
+        tokens = norm.split()
+        for token in tokens:
+            if SequenceMatcher(None, specialty_norm, token).ratio() >= 0.55:
+                return True
+        # También comparar contra la cadena completa
+        return SequenceMatcher(None, specialty_norm, norm).ratio() >= 0.62
+
+    specialty_candidates: pd.DataFrame = pd.DataFrame()
     if specialty_norm and "especialidades_texto" in hospitals.columns:
-        specialty_candidates = hospitals[
-            hospitals["especialidades_texto"].astype(str).apply(lambda text: specialty_norm in _normalize_text(text))
-        ]
+        spec_series = hospitals["especialidades_texto"].astype(str)
+        # Paso 1: coincidencia exacta por substring
+        specialty_candidates = hospitals[spec_series.apply(_exact_match)]
+        # Paso 2: fuzzy si no hay coincidencia exacta
+        if specialty_candidates.empty:
+            specialty_candidates = hospitals[spec_series.apply(_fuzzy_match)]
 
     search_space = specialty_candidates if not specialty_candidates.empty else hospitals
 
-    if graph is None or search_space.empty or "lat" not in search_space.columns or "lon" not in search_space.columns:
+    if graph is None or "lat" not in search_space.columns or "lon" not in search_space.columns:
         return search_space.iloc[0] if not search_space.empty else hospitals.iloc[0]
 
-    base_nodes = [int(base["nodo_red"]) for base in bases if "nodo_red" in base]
-    travel_costs = _multi_source_min_costs(graph, base_nodes)
+    # ── 2. Calcular costes desde el SOS (o desde las bases SAMUR como fallback) ──
+    if sos_lat is not None and sos_lon is not None:
+        try:
+            sos_node = int(ox.distance.nearest_nodes(graph, X=float(sos_lon), Y=float(sos_lat)))
+            origin_nodes = [sos_node]
+        except Exception:
+            origin_nodes = []
+    else:
+        origin_nodes = []
 
+    if not origin_nodes:
+        # Fallback: usar bases SAMUR como origen múltiple
+        bases = load_samur_bases_for_dispatch(graph)
+        origin_nodes = [int(b["nodo_red"]) for b in bases if "nodo_red" in b]
+
+    travel_costs = _multi_source_min_costs(graph, origin_nodes)
+
+    # ── 3. Seleccionar el hospital con menor coste de viaje ──────────────────
     best_idx = None
     best_cost = float("inf")
     for idx, row in search_space.iterrows():
         target_node = row.get("nodo_red")
         if pd.isna(target_node):
-            lat = row.get("lat")
-            lon = row.get("lon")
+            lat, lon = row.get("lat"), row.get("lon")
             if pd.isna(lat) or pd.isna(lon):
                 continue
             try:
@@ -703,7 +750,13 @@ def main() -> None:
 
         notes = st.text_area("Notas del operador", height=90, placeholder="Contexto adicional y justificacion")
 
-        chosen_hosp = select_hospital(hospitals, final_spec)
+        # Leer posición SOS publicada por el conductor (si está disponible)
+        _shared = load_state()
+        _sos_nav = _shared.get("navigation", {}).get("sos", {}) if isinstance(_shared.get("navigation"), dict) else {}
+        _sos_lat = float(_sos_nav["lat"]) if _sos_nav.get("lat") is not None else None
+        _sos_lon = float(_sos_nav["lon"]) if _sos_nav.get("lon") is not None else None
+
+        chosen_hosp = select_hospital(hospitals, final_spec, sos_lat=_sos_lat, sos_lon=_sos_lon)
         st.markdown('<div class="section-title">4) Hospital de referencia y contacto</div>', unsafe_allow_html=True)
         st.dataframe(
             pd.DataFrame(

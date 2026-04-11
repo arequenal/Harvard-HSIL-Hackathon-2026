@@ -1,6 +1,6 @@
 {
-  "version": 3,
-  "updated_at": "2026-04-11T08:19:09.230029+00:00",
+  "version": 2,
+  "updated_at": "2026-04-11T08:21:26.227849+00:00",
   "case": {
     "summary": "Nivel 4 - Muy urgente / Medicina intensiva",
     "source_text": "paciente varón de 67 anos con dolor toracico oppresivo. Disney a presión arterial 178 sobre 102. Saturación 90 y Glasswo 13.",
@@ -10,17 +10,17 @@
     "explicacion_especialidad": "Se le quiere llevar a Medicina intensiva con confianza 0.99, debido a que presenta sintomas de edad avanzada (67 anos), saturacion baja (90%), dolor toracico presente asociadas normalmente a problemas como patologia cardiovascular aguda o dolor toracico de alto riesgo, hipoxemia clinicamente relevante."
   },
   "destination": {
-    "centro_id": "CH0023",
-    "nombre": "Hospital CH0023",
-    "telefono": "+34 911000001",
-    "email": "admisiones.ch0023@hospital.madrid.es",
-    "direccion": "AVDA de Córdoba S/N Madrid 28041",
-    "especialidades": "Otorrinolaringología | Oftalmología | Neurología | Nefrología | Endocrinología | Trasplante de órganos | Cardiología | Pediatría | Diálisis | Medicina interna | Geriatría | Aparato digestivo | Neurocirugía | Enfermería obstétrico-ginecológica (matrona) | Neumología | Banco de tejidos | Otras unidades asistenciales | Cirugía menor ambulatoria | Foniatría | Cirugía maxilofacial | Medicina nuclear | Alergología | Fisioterapia | Litotricia renal | Cirugía torácica | Planificación familiar | Obstetricia | Obtención de tejidos | Psiquiatría | Cirugía ortopédica y Traumatología | Cirugía refractiva | Vacunación | Angiología y Cirugía Vascular | Tratamiento del dolor | Banco de semen | Fecundación in vitro | Oncología | Implantación de tejidos | Laboratorio de hematología | Atención Continuada en Atención Primaria | Rehabilitación | Banco de embriones | Inseminación artificial | Cuidados intermedios neonatales | Enfermería | Laboratorio Clínico | Obtención de muestras | Cirugía pediátrica | Banco de oocitos | Dermatología | Hospital de día | Cirugía general y digestivo | Medicina intensiva | Hematología clínica | Cirugía mayor ambulatoria | Cirugía plástica y reparadora | Interrupción voluntaria del embarazo | Radioterapia | Urología | Neurofisiología | Psiquiatría Infantil y de la Adolescencia | Extracción de órganos | Radiodiagnóstico | Servicio de transfusión | Atención sanitaria domiciliaria | Logopedia | Recuperación de oocitos | Reumatología | Medicina del trabajo | Genética | Anatomía patológica | Hemodinámica | Laboratorio de semen para capacitación espermática | Cuidados intensivos neonatales | Farmacología clínica | Extracción de sangre para donación | Microbiología y Parasitología | Cuidados paliativos | Terapia ocupacional | Cirugía cardiaca | Ginecología | Anestesia y Reanimación | Nutrición y Dietética | Medicina preventiva | Farmacia | Inmunología | Bioquímica clínica | Psicología clínica",
+    "centro_id": "CH0034",
+    "nombre": "Hospital CH0034",
+    "telefono": "+34 911000003",
+    "email": "admisiones.ch0034@hospital.madrid.es",
+    "direccion": "CALLE del Doctor Esquerdo 46 Madrid 28007",
+    "especialidades": "Nefrología | Trasplante de órganos | Extracción de órganos | Otras unidades asistenciales | Aparato digestivo | Radiodiagnóstico | Servicio de transfusión | Extracción de sangre para donación | Foniatría | Odontología/Estomatología | Endocrinología | Cardiología | Rehabilitación | Urología | Cuidados intermedios neonatales | Diálisis | Obtención de tejidos | Radioterapia | Hematología clínica | Microbiología y Parasitología | Bioquímica clínica | Cirugía menor ambulatoria | Cirugía cardiaca | Cirugía pediátrica | Nutrición y Dietética | Banco de oocitos | Farmacia | Cirugía plástica y reparadora | Anestesia y Reanimación | Fecundación in vitro | Psiquiatría Infantil y de la Adolescencia | Medicina preventiva | Inseminación artificial | Genética | Inmunología | Cirugía ortopédica y Traumatología | Otorrinolaringología | Ginecología | Cuidados intensivos neonatales | Geriatría | Banco de tejidos | Laboratorio de hematología | Psiquiatría | Hospital de día | Litotricia renal | Medicina intensiva | Banco de embriones | Laboratorio de semen para capacitación espermática | Implantación de tejidos | Medicina nuclear | Laboratorio Clínico | Oftalmología | Vacunación | Oncología | Atención sanitaria domiciliaria | Logopedia | Recuperación de oocitos | Enfermería obstétrico-ginecológica (matrona) | Psicología clínica | Angiología y Cirugía Vascular | Tratamiento del dolor | Obstetricia | Enfermería | Medicina interna | Cuidados paliativos | Neurocirugía | Cirugía general y digestivo | Neumología | Transporte sanitario (carretera, aéreo, marítimo) | Asistencia a lesionados y contaminados por elementos radiactivos y radiaciones ionizantes | Atención Continuada en Atención Primaria | Planificación familiar | Neurofisiología | Medicina del trabajo | Cirugía mayor ambulatoria | Alergología | Cirugía torácica | Banco de semen | Anatomía patológica | Obtención de muestras | Reumatología | Dermatología | Cirugía maxilofacial | Hemodinámica | Terapia ocupacional | Fisioterapia | Pediatría | Neurología",
     "perfiles": "cardiovascular | neurologia | trauma_ortopedia | obstetricia_neonatal | pediatria | salud_mental | diagnostico | urgencias_criticas | rehabilitacion | cirugia | oncologia",
     "municipio": "Madrid",
     "centro_tipo": "Hospital general",
-    "lat": 40.37644141048938,
-    "lon": -3.696941655287421,
+    "lat": 40.4189887905882,
+    "lon": -3.66992777848944,
     "eta_min": 12
   },
   "traffic_alerts": [
@@ -29,9 +29,9 @@
   "operator_notes": "",
   "navigation": {
     "sos": {
-      "nombre": "SOS Cuatro Caminos",
-      "lat": 40.4473,
-      "lon": -3.7033
+      "nombre": "SOS Ventas",
+      "lat": 40.4312,
+      "lon": -3.6637
     }
   }
 }
