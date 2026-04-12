@@ -21,7 +21,7 @@ import streamlit.components.v1 as components
 from visual.dispatch_shared import load_state
 
 BASE_DIR = Path(__file__).resolve().parent
-GRAPH_PATH = BASE_DIR / "madrid_grafo.graphml"
+GRAPH_PATH = BASE_DIR / "data" / "madrid_grafo.graphml"
 PROCESSED_HOSPITALES_PATH = (
     PROJECT_ROOT / "analisis_datos" / "data" / "processed" / "centros_servicios_establecimientos_sanitarios_limpio.csv"
 )

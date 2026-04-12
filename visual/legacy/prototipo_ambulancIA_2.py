@@ -8,9 +8,11 @@ from pathlib import Path
 import streamlit.components.v1 as components
 
 BASE_DIR = Path(__file__).resolve().parent
-GRAPH_PATH = BASE_DIR / "madrid_grafo.graphml"
-HOSPITALES_PATH = BASE_DIR / "hospitales_madrid_nodos.csv"
-PROCESSED_HOSPITALES_PATH = BASE_DIR.parent / "analisis_datos" / "data" / "processed" / "centros_servicios_establecimientos_sanitarios_limpio.csv"
+PROJECT_ROOT = BASE_DIR.parents[1]
+VISUAL_DIR = PROJECT_ROOT / "visual"
+GRAPH_PATH = VISUAL_DIR / "data" / "madrid_grafo.graphml"
+HOSPITALES_PATH = VISUAL_DIR / "data" / "hospitales_madrid_nodos.csv"
+PROCESSED_HOSPITALES_PATH = PROJECT_ROOT / "analisis_datos" / "data" / "processed" / "centros_servicios_establecimientos_sanitarios_limpio.csv"
 
 # ==============================================================================
 # 1. CONFIGURACIÓN DE LA PÁGINA (Pantalla completa real)

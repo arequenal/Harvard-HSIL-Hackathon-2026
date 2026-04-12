@@ -1,12 +1,13 @@
 [project]
 name = "hackathon-hsil-2026"
 version = "0.1.0"
-description = "Add your description here"
+description = "AmbulancIA: prototipo de triaje y coordinacion operativa para emergencias prehospitalarias"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "matplotlib>=3.10.8",
     "networkx>=3.4.2",
+    "numpy>=2.2.0",
     "pandas>=2.2.3",
     "osmnx>=2.1.0",
     "faster-whisper>=1.1.1",

@@ -1,0 +1,42 @@
+services:
+  operator:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: ambulancia-operator
+    ports:
+      - "8501:8501"
+    environment:
+      - AMBULANCIA_LLM_PROVIDER=${AMBULANCIA_LLM_PROVIDER:-heuristico}
+      - AMBULANCIA_LLM_MODEL=${AMBULANCIA_LLM_MODEL:-llama3.1:8b-instruct}
+      - AMBULANCIA_LLM_BASE_URL=${AMBULANCIA_LLM_BASE_URL:-http://ollama:11434}
+    command: streamlit run visual/operator_service.py --server.address=0.0.0.0 --server.port=8501
+    volumes:
+      - ./:/app
+
+  driver:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: ambulancia-driver
+    ports:
+      - "8502:8502"
+    environment:
+      - AMBULANCIA_LLM_PROVIDER=${AMBULANCIA_LLM_PROVIDER:-heuristico}
+      - AMBULANCIA_LLM_MODEL=${AMBULANCIA_LLM_MODEL:-llama3.1:8b-instruct}
+      - AMBULANCIA_LLM_BASE_URL=${AMBULANCIA_LLM_BASE_URL:-http://ollama:11434}
+    command: streamlit run visual/conductor_navegacion.py --server.address=0.0.0.0 --server.port=8502
+    volumes:
+      - ./:/app
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ambulancia-ollama
+    profiles: ["llm"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+
+volumes:
+  ollama-data:

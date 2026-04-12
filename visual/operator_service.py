@@ -31,7 +31,7 @@ from visual.dispatch_shared import load_state, update_state
 PROCESSED_HOSPITALES_PATH = (
     PROJECT_ROOT / "analisis_datos" / "data" / "processed" / "centros_servicios_establecimientos_sanitarios_limpio.csv"
 )
-GRAPH_PATH = PROJECT_ROOT / "visual" / "madrid_grafo.graphml"
+GRAPH_PATH = PROJECT_ROOT / "visual" / "data" / "madrid_grafo.graphml"
 SAMUR_BASES_PATH = PROJECT_ROOT / "analisis_datos" / "data" / "processed" / "bases_samur_madrid.csv"
 AUDIO_SAMPLES_PATH = PROJECT_ROOT / "audio" / "samples"
 

@@ -18,8 +18,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from visual.dispatch_shared import default_state, load_state, save_state, update_state
 
 BASE_DIR = Path(__file__).resolve().parent
-GRAPH_PATH = BASE_DIR / "madrid_grafo.graphml"
-HOSPITALES_PATH = BASE_DIR / "hospitales_madrid_nodos.csv"
+GRAPH_PATH = BASE_DIR / "data" / "madrid_grafo.graphml"
+HOSPITALES_PATH = BASE_DIR / "data" / "hospitales_madrid_nodos.csv"
 PROCESSED_HOSPITALES_PATH = BASE_DIR.parent / "analisis_datos" / "data" / "processed" / "centros_servicios_establecimientos_sanitarios_limpio.csv"
 
 st.set_page_config(page_title="AmbulancIA · Conductor", layout="wide", initial_sidebar_state="collapsed")
