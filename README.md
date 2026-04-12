@@ -53,42 +53,44 @@ El proyecto incluye ademas:
 
 ## Estructura del repositorio
 
+```text
 .
-|-- analisis_datos/
-|   |-- data/
-|   |   |-- raw/
-|   |   `-- processed/
-|   |-- notebooks/
-|   `-- reports/
-|-- audio/
-|   `-- samples/
-|-- ml/
-|   |-- data/
-|   |-- models/
-|   |-- urgency_specialty_classifier.ipynb
-|   `-- urgency_specialty_classifier.py
-|-- runtime/
-|   `-- dispatch_state.json
-|-- visual/
-|   |-- data/
-|   |   |-- hospitales_madrid_nodos.csv
-|   |   |-- madrid_grafo.graphml
-|   |   `-- madrid_grafo.rar
-|   |-- legacy/
-|   |   |-- README.md
-|   |   |-- prototipo_ambulancIA.py
-|   |   |-- prototipo_ambulancIA_2.py
-|   |   `-- requirements.txt
-|   |-- README.md
-|   |-- conductor_navegacion.py
-|   |-- dispatch_shared.py
-|   |-- operador_mpaa_Unificado.py
-|   `-- operator_service.py
-|-- clinical_llm.py
-|-- docker-compose.yml
-|-- pyproject.toml
-`-- docker/
-    `-- Dockerfile
+├── analisis_datos/
+│   ├── data/
+│   │   ├── raw/
+│   │   └── processed/
+│   ├── notebooks/
+│   └── reports/
+├── audio/
+│   └── samples/
+├── ml/
+│   ├── data/
+│   ├── models/
+│   ├── urgency_specialty_classifier.ipynb
+│   └── urgency_specialty_classifier.py
+├── runtime/
+│   └── dispatch_state.json
+├── visual/
+│   ├── data/
+│   │   ├── hospitales_madrid_nodos.csv
+│   │   ├── madrid_grafo.graphml
+│   │   └── madrid_grafo.rar
+│   ├── legacy/
+│   │   ├── README.md
+│   │   ├── prototipo_ambulancIA.py
+│   │   ├── prototipo_ambulancIA_2.py
+│   │   └── requirements.txt
+│   ├── README.md
+│   ├── conductor_navegacion.py
+│   ├── dispatch_shared.py
+│   ├── operador_mpaa_Unificado.py
+│   └── operator_service.py
+├── clinical_llm.py
+├── docker-compose.yml
+├── pyproject.toml
+└── docker/
+  └── Dockerfile
+```
 
 ## Requisitos
 
